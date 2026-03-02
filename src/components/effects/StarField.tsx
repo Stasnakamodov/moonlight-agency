@@ -620,11 +620,11 @@ function drawConstellation(
   const cy = c.vpY * lh + camOy * -0.03;
   const md = Math.min(lw, lh);
 
-  // Faint connecting lines first
+  // Connecting lines
   ctx.save();
-  ctx.strokeStyle = `rgba(140,170,220,${opacity * 0.06})`;
-  ctx.lineWidth = 0.8;
-  ctx.setLineDash([4, 6]);
+  ctx.strokeStyle = `rgba(140,175,230,${opacity * 0.22})`;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 8]);
   for (const [a, b] of c.edges) {
     const sa = c.stars[a], sb = c.stars[b];
     ctx.beginPath();
@@ -639,16 +639,17 @@ function drawConstellation(
   for (const s of c.stars) {
     const sx = cx + s.dx * md;
     const sy = cy + s.dy * md;
-    const sz = magToSize(s.mag) * 0.7;
+    const sz = magToSize(s.mag) * 1.1;
     const br = magToBrightness(s.mag);
     const col = s.color || [220, 225, 245];
-    const sa = opacity * br;
+    const sa = Math.min(1, opacity * br * 1.8);
 
-    // Soft glow
-    const gr = sz * 5;
+    // Large glow halo
+    const gr = sz * 8;
     const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, gr);
-    grd.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.15})`);
-    grd.addColorStop(0.3, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.04})`);
+    grd.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.35})`);
+    grd.addColorStop(0.2, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.12})`);
+    grd.addColorStop(0.5, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.03})`);
     grd.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
     ctx.beginPath(); ctx.arc(sx, sy, gr, 0, Math.PI * 2);
     ctx.fillStyle = grd; ctx.fill();
@@ -656,7 +657,11 @@ function drawConstellation(
     // Scintillating core
     const scint = 1 + 0.15 * Math.sin(time * 0.002 + s.dx * 100 + s.dy * 200);
     ctx.beginPath(); ctx.arc(sx, sy, sz * scint, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${sa})`;
+    ctx.fillStyle = `rgba(${Math.min(255, col[0] + 30)},${Math.min(255, col[1] + 30)},${Math.min(255, col[2] + 30)},${sa})`;
+    ctx.fill();
+    // White-hot center
+    ctx.beginPath(); ctx.arc(sx, sy, sz * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${sa * 0.8})`;
     ctx.fill();
   }
 }
@@ -674,28 +679,30 @@ function drawAndromeda(
   // Extended disk — large tilted ellipse
   ctx.save(); ctx.scale(1, 0.35);
   const disk = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-  disk.addColorStop(0, `rgba(255,240,200,${opacity * 0.12})`);
-  disk.addColorStop(0.08, `rgba(255,230,180,${opacity * 0.08})`);
-  disk.addColorStop(0.25, `rgba(200,190,170,${opacity * 0.04})`);
-  disk.addColorStop(0.5, `rgba(160,170,190,${opacity * 0.015})`);
-  disk.addColorStop(0.8, `rgba(130,140,170,${opacity * 0.005})`);
-  disk.addColorStop(1, `rgba(100,110,150,0)`);
+  disk.addColorStop(0, `rgba(255,240,200,${opacity * 0.45})`);
+  disk.addColorStop(0.06, `rgba(255,230,180,${opacity * 0.30})`);
+  disk.addColorStop(0.15, `rgba(220,210,185,${opacity * 0.15})`);
+  disk.addColorStop(0.3, `rgba(180,180,170,${opacity * 0.07})`);
+  disk.addColorStop(0.5, `rgba(150,160,185,${opacity * 0.03})`);
+  disk.addColorStop(0.75, `rgba(120,135,170,${opacity * 0.01})`);
+  disk.addColorStop(1, `rgba(90,100,140,0)`);
   ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
   ctx.fillStyle = disk; ctx.fill();
   ctx.restore();
   // Bright core
   ctx.save(); ctx.scale(1, 0.5);
-  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.12);
-  core.addColorStop(0, `rgba(255,245,220,${opacity * 0.35})`);
-  core.addColorStop(0.4, `rgba(255,235,190,${opacity * 0.15})`);
-  core.addColorStop(1, `rgba(230,210,170,0)`);
-  ctx.beginPath(); ctx.arc(0, 0, size * 0.12, 0, Math.PI * 2);
+  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.15);
+  core.addColorStop(0, `rgba(255,248,225,${opacity * 0.85})`);
+  core.addColorStop(0.3, `rgba(255,240,200,${opacity * 0.45})`);
+  core.addColorStop(0.7, `rgba(240,220,180,${opacity * 0.15})`);
+  core.addColorStop(1, `rgba(220,200,160,0)`);
+  ctx.beginPath(); ctx.arc(0, 0, size * 0.15, 0, Math.PI * 2);
   ctx.fillStyle = core; ctx.fill();
   ctx.restore();
-  // Dust lane hint — dark streak across center
-  ctx.save(); ctx.scale(1, 0.15); ctx.rotate(0.1);
-  ctx.fillStyle = `rgba(5,5,15,${opacity * 0.08})`;
-  ctx.beginPath(); ctx.ellipse(0, 0, size * 0.5, size * 0.08, 0, 0, Math.PI * 2);
+  // Dust lane — dark streak across center
+  ctx.save(); ctx.scale(1, 0.12); ctx.rotate(0.1);
+  ctx.fillStyle = `rgba(5,5,15,${opacity * 0.25})`;
+  ctx.beginPath(); ctx.ellipse(0, 0, size * 0.55, size * 0.12, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   ctx.restore();
@@ -707,14 +714,17 @@ function drawPleiades(
   opacity: number, time: number
 ) {
   if (opacity < 0.01) return;
-  // Blue reflection nebulosity
-  const neb = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 1.5);
-  neb.addColorStop(0, `rgba(100,140,255,${opacity * 0.06})`);
-  neb.addColorStop(0.3, `rgba(80,120,240,${opacity * 0.03})`);
-  neb.addColorStop(0.7, `rgba(60,90,200,${opacity * 0.008})`);
-  neb.addColorStop(1, `rgba(40,60,160,0)`);
-  ctx.beginPath(); ctx.arc(cx, cy, size * 1.5, 0, Math.PI * 2);
+  // Blue reflection nebulosity — prominent haze
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  const neb = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 2);
+  neb.addColorStop(0, `rgba(110,150,255,${opacity * 0.18})`);
+  neb.addColorStop(0.15, `rgba(90,130,250,${opacity * 0.10})`);
+  neb.addColorStop(0.35, `rgba(70,110,230,${opacity * 0.05})`);
+  neb.addColorStop(0.6, `rgba(50,80,200,${opacity * 0.015})`);
+  neb.addColorStop(1, `rgba(30,50,150,0)`);
+  ctx.beginPath(); ctx.arc(cx, cy, size * 2, 0, Math.PI * 2);
   ctx.fillStyle = neb; ctx.fill();
+  ctx.restore();
   // 7 sisters — bright blue stars in tight cluster
   const sisters = [
     { dx: 0, dy: 0, mag: 2.87 },       // Alcyone
@@ -728,19 +738,24 @@ function drawPleiades(
   for (const s of sisters) {
     const sx = cx + s.dx * size;
     const sy = cy + s.dy * size;
-    const sz = magToSize(s.mag) * 0.5;
-    const br = magToBrightness(s.mag) * opacity;
+    const sz = magToSize(s.mag) * 0.8;
+    const br = Math.min(1, magToBrightness(s.mag) * opacity * 2);
     const sc = 1 + 0.1 * Math.sin(time * 0.003 + s.dx * 50);
-    // Star glow
-    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, sz * 4);
-    g.addColorStop(0, `rgba(170,200,255,${br * 0.2})`);
-    g.addColorStop(0.5, `rgba(130,170,255,${br * 0.04})`);
-    g.addColorStop(1, `rgba(100,140,255,0)`);
-    ctx.beginPath(); ctx.arc(sx, sy, sz * 4, 0, Math.PI * 2);
+    // Large star glow
+    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, sz * 7);
+    g.addColorStop(0, `rgba(170,200,255,${br * 0.4})`);
+    g.addColorStop(0.2, `rgba(150,185,255,${br * 0.15})`);
+    g.addColorStop(0.5, `rgba(120,160,255,${br * 0.04})`);
+    g.addColorStop(1, `rgba(80,120,230,0)`);
+    ctx.beginPath(); ctx.arc(sx, sy, sz * 7, 0, Math.PI * 2);
     ctx.fillStyle = g; ctx.fill();
     // Core
     ctx.beginPath(); ctx.arc(sx, sy, sz * sc, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(200,220,255,${br})`;
+    ctx.fillStyle = `rgba(210,225,255,${br})`;
+    ctx.fill();
+    // White center
+    ctx.beginPath(); ctx.arc(sx, sy, sz * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${br * 0.7})`;
     ctx.fill();
   }
 }
@@ -752,35 +767,41 @@ function drawOrionNebula(
 ) {
   if (opacity < 0.01) return;
   ctx.save(); ctx.translate(cx, cy);
-  // Main emission (pink/magenta + green)
+  // Main emission (pink/magenta + green) — vivid
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
   ctx.save(); ctx.scale(1, 0.65);
   const em = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-  em.addColorStop(0, `rgba(255,200,210,${opacity * 0.15})`);
-  em.addColorStop(0.15, `rgba(230,160,180,${opacity * 0.10})`);
-  em.addColorStop(0.3, `rgba(180,120,160,${opacity * 0.06})`);
-  em.addColorStop(0.5, `rgba(100,140,130,${opacity * 0.03})`);
-  em.addColorStop(0.75, `rgba(60,100,120,${opacity * 0.01})`);
+  em.addColorStop(0, `rgba(255,180,200,${opacity * 0.45})`);
+  em.addColorStop(0.1, `rgba(240,150,175,${opacity * 0.30})`);
+  em.addColorStop(0.25, `rgba(200,120,160,${opacity * 0.15})`);
+  em.addColorStop(0.45, `rgba(140,130,140,${opacity * 0.06})`);
+  em.addColorStop(0.7, `rgba(80,110,130,${opacity * 0.02})`);
   em.addColorStop(1, `rgba(40,60,80,0)`);
   ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
   ctx.fillStyle = em; ctx.fill();
   ctx.restore();
   // Green OIII emission zone
-  const g2 = ctx.createRadialGradient(size * 0.08, -size * 0.05, 0, size * 0.08, -size * 0.05, size * 0.4);
-  g2.addColorStop(0, `rgba(80,200,140,${opacity * 0.08})`);
-  g2.addColorStop(0.5, `rgba(60,160,120,${opacity * 0.03})`);
-  g2.addColorStop(1, `rgba(40,120,100,0)`);
-  ctx.beginPath(); ctx.arc(size * 0.08, -size * 0.05, size * 0.4, 0, Math.PI * 2);
+  const g2 = ctx.createRadialGradient(size * 0.08, -size * 0.05, 0, size * 0.08, -size * 0.05, size * 0.45);
+  g2.addColorStop(0, `rgba(80,220,140,${opacity * 0.22})`);
+  g2.addColorStop(0.3, `rgba(60,180,120,${opacity * 0.10})`);
+  g2.addColorStop(0.7, `rgba(40,140,100,${opacity * 0.03})`);
+  g2.addColorStop(1, `rgba(30,100,80,0)`);
+  ctx.beginPath(); ctx.arc(size * 0.08, -size * 0.05, size * 0.45, 0, Math.PI * 2);
   ctx.fillStyle = g2; ctx.fill();
-  // Trapezium — 4 central stars
+  ctx.restore();
+  // Trapezium — 4 bright central stars
   const trap = [
     { dx: -0.03, dy: -0.02 }, { dx: 0.03, dy: -0.01 },
     { dx: 0.01, dy: 0.03 }, { dx: -0.02, dy: 0.02 },
   ];
   for (const t of trap) {
     const tx = t.dx * size, ty = t.dy * size;
-    ctx.beginPath(); ctx.arc(tx, ty, 1.2, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(220,230,255,${opacity * 0.6})`;
-    ctx.fill();
+    const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, 4);
+    tg.addColorStop(0, `rgba(255,255,255,${opacity * 0.8})`);
+    tg.addColorStop(0.5, `rgba(200,220,255,${opacity * 0.3})`);
+    tg.addColorStop(1, `rgba(150,180,255,0)`);
+    ctx.beginPath(); ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+    ctx.fillStyle = tg; ctx.fill();
   }
   ctx.restore();
 }
@@ -1845,7 +1866,7 @@ export function StarField() {
         let op = 0;
         for (let i = 0; i < wts.length && i < c.zoneWeights.length; i++)
           op = Math.max(op, wts[i] * c.zoneWeights[i]);
-        if (op > 0.01) drawConstellation(ctx, c, op * 0.8, lw, lh, time, smoothCameraX, smoothCameraY);
+        if (op > 0.01) drawConstellation(ctx, c, op * 1.0, lw, lh, time, smoothCameraX, smoothCameraY);
       }
       // Deep sky objects
       for (const d of DEEP_SKY) {
@@ -1856,9 +1877,9 @@ export function StarField() {
         const dx = d.vpX * lw + smoothCameraX * -0.03;
         const dy = d.vpY * lh + smoothCameraY * -0.03;
         const sz = d.size * md;
-        if (d.type === 'andromeda') drawAndromeda(ctx, dx, dy, sz, d.angle, op * 0.7);
-        else if (d.type === 'pleiades') drawPleiades(ctx, dx, dy, sz, op * 0.7, time);
-        else if (d.type === 'orion_nebula') drawOrionNebula(ctx, dx, dy, sz, op * 0.7, time);
+        if (d.type === 'andromeda') drawAndromeda(ctx, dx, dy, sz, d.angle, op * 1.0);
+        else if (d.type === 'pleiades') drawPleiades(ctx, dx, dy, sz, op * 1.0, time);
+        else if (d.type === 'orion_nebula') drawOrionNebula(ctx, dx, dy, sz, op * 1.0, time);
       }
     };
 
@@ -1872,9 +1893,9 @@ export function StarField() {
         ctx.globalCompositeOperation = "lighter";
         const zh = lh * 0.55;
         const zg = ctx.createLinearGradient(lw * 0.5, lh, lw * 0.5, lh - zh);
-        zg.addColorStop(0, `rgba(255,230,180,${zodOp * 0.025})`);
-        zg.addColorStop(0.15, `rgba(240,210,150,${zodOp * 0.015})`);
-        zg.addColorStop(0.4, `rgba(200,180,130,${zodOp * 0.005})`);
+        zg.addColorStop(0, `rgba(255,230,180,${zodOp * 0.08})`);
+        zg.addColorStop(0.15, `rgba(240,210,150,${zodOp * 0.05})`);
+        zg.addColorStop(0.4, `rgba(200,180,130,${zodOp * 0.02})`);
         zg.addColorStop(1, `rgba(160,140,100,0)`);
         ctx.beginPath();
         ctx.moveTo(lw * 0.2, lh);
@@ -1891,9 +1912,9 @@ export function StarField() {
         ctx.globalCompositeOperation = "lighter";
         const agH = lh * 0.08;
         const ag = ctx.createLinearGradient(0, lh, 0, lh - agH);
-        ag.addColorStop(0, `rgba(80,180,120,${agOp * 0.02})`);
-        ag.addColorStop(0.3, `rgba(60,150,100,${agOp * 0.012})`);
-        ag.addColorStop(0.7, `rgba(40,120,80,${agOp * 0.004})`);
+        ag.addColorStop(0, `rgba(80,180,120,${agOp * 0.06})`);
+        ag.addColorStop(0.3, `rgba(60,150,100,${agOp * 0.04})`);
+        ag.addColorStop(0.7, `rgba(40,120,80,${agOp * 0.015})`);
         ag.addColorStop(1, `rgba(20,80,60,0)`);
         ctx.fillStyle = ag;
         ctx.fillRect(0, lh - agH, lw, agH);
@@ -2234,7 +2255,7 @@ export function StarField() {
       if (time !== undefined && qualityLevel > 0.3) drawSpecials(wts, time);
 
       // Constellations & deep sky objects (behind star layers)
-      if (time !== undefined && qualityLevel > 0.3) drawConstellationsAndDSO(wts, time);
+      if (time !== undefined && qualityLevel > 0.1) drawConstellationsAndDSO(wts, time);
 
       // Galaxies
       for (const g of galaxies) drawGalObj(g, time ?? 0);
