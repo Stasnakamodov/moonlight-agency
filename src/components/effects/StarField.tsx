@@ -181,6 +181,7 @@ interface Star {
   cSize?: number; cBright?: number;
   orbPeriod?: number; orbPhase?: number; orbSep?: number;
   dustDim?: number;
+  cepheidPeriod?: number; // pulsation period in seconds (Cepheid variable)
   // Pre-rendered sprite (layers 2-5)
   sprite?: HTMLCanvasElement;
   spriteHalf?: number;
@@ -305,6 +306,87 @@ const ZONES: UniverseZone[] = [
       peak: 35,
     },
   },
+];
+
+/* ================================================================
+   CONSTELLATIONS — recognizable star patterns tied to scroll zones
+   Positions: fractional viewport offsets from constellation center
+   ================================================================ */
+interface ConstellationDef {
+  vpX: number; vpY: number;    // center in viewport (0-1)
+  zoneWeights: number[];       // which zones show this (index → blend factor)
+  stars: { dx: number; dy: number; mag: number; color?: [number, number, number] }[];
+  edges: [number, number][];   // index pairs for connecting lines
+}
+
+const CONSTELLATIONS: ConstellationDef[] = [
+  // Cassiopeia — W shape, upper right, Zone 0-1
+  {
+    vpX: 0.78, vpY: 0.18,
+    zoneWeights: [1, 0.5, 0, 0, 0],
+    stars: [
+      { dx: -0.065, dy: -0.025, mag: 2.28 },  // β Caph
+      { dx: -0.025, dy: 0.030, mag: 2.24 },   // α Schedar
+      { dx: 0.005, dy: -0.020, mag: 2.47 },   // γ
+      { dx: 0.035, dy: 0.028, mag: 2.68 },    // δ Ruchbah
+      { dx: 0.065, dy: -0.015, mag: 3.37 },   // ε Segin
+    ],
+    edges: [[0, 1], [1, 2], [2, 3], [3, 4]],
+  },
+  // Orion — hunter with belt, center-left, Zone 1-2
+  {
+    vpX: 0.28, vpY: 0.45,
+    zoneWeights: [0, 0.6, 1, 0.3, 0],
+    stars: [
+      { dx: -0.050, dy: -0.075, mag: 0.5, color: [255, 180, 120] },  // Betelgeuse (red)
+      { dx: 0.045, dy: 0.070, mag: 0.13, color: [170, 200, 255] },  // Rigel (blue)
+      { dx: 0.040, dy: -0.065, mag: 1.64 },   // Bellatrix
+      { dx: -0.040, dy: 0.065, mag: 2.09 },   // Saiph
+      { dx: -0.012, dy: 0.000, mag: 1.77 },   // Alnitak (belt)
+      { dx: 0.000, dy: 0.000, mag: 1.69 },    // Alnilam (belt)
+      { dx: 0.012, dy: -0.002, mag: 2.23 },   // Mintaka (belt)
+      { dx: 0.002, dy: 0.030, mag: 3.5 },     // Sword (M42 location)
+    ],
+    edges: [[0, 2], [0, 4], [2, 6], [4, 5], [5, 6], [3, 4], [1, 6], [5, 7]],
+  },
+  // Big Dipper (Ursa Major) — Zone 2-3, right side
+  {
+    vpX: 0.72, vpY: 0.32,
+    zoneWeights: [0, 0, 0.5, 1, 0.3],
+    stars: [
+      { dx: 0.070, dy: 0.010, mag: 1.79 },    // α Dubhe
+      { dx: 0.055, dy: 0.035, mag: 2.37 },    // β Merak
+      { dx: 0.025, dy: 0.030, mag: 2.44 },    // γ Phecda
+      { dx: 0.015, dy: 0.005, mag: 3.31 },    // δ Megrez
+      { dx: -0.015, dy: -0.005, mag: 1.77 },  // ε Alioth
+      { dx: -0.042, dy: -0.020, mag: 2.27 },  // ζ Mizar
+      { dx: -0.070, dy: -0.008, mag: 1.86 },  // η Alkaid
+    ],
+    edges: [[0, 1], [1, 2], [2, 3], [3, 0], [3, 4], [4, 5], [5, 6]],
+  },
+];
+
+/* ================================================================
+   DEEP SKY OBJECTS — galaxies, nebulae, clusters tied to zones
+   ================================================================ */
+interface DeepSkyDef {
+  vpX: number; vpY: number;
+  zoneWeights: number[];
+  type: 'andromeda' | 'pleiades' | 'orion_nebula';
+  size: number;   // fraction of min(lw,lh)
+  angle: number;  // rotation
+}
+
+const DEEP_SKY: DeepSkyDef[] = [
+  // Andromeda Galaxy (M31) — Zone 3, upper-left
+  { vpX: 0.25, vpY: 0.28, zoneWeights: [0, 0, 0.2, 1, 0.4],
+    type: 'andromeda', size: 0.18, angle: -0.65 },
+  // Pleiades (M45) — Zone 1, right-center
+  { vpX: 0.82, vpY: 0.48, zoneWeights: [0.3, 1, 0.4, 0, 0],
+    type: 'pleiades', size: 0.08, angle: 0 },
+  // Orion Nebula (M42) — Zone 1-2, below Orion's belt
+  { vpX: 0.282, vpY: 0.48, zoneWeights: [0, 0.6, 1, 0.3, 0],
+    type: 'orion_nebula', size: 0.06, angle: 0.2 },
 ];
 
 /* ================================================================
@@ -523,6 +605,187 @@ function drawStarFormingKnots(
 }
 
 /* ================================================================
+   CONSTELLATION RENDERER
+   ================================================================ */
+function drawConstellation(
+  ctx: CanvasRenderingContext2D,
+  c: ConstellationDef,
+  opacity: number,
+  lw: number, lh: number,
+  time: number,
+  camOx: number, camOy: number,
+) {
+  if (opacity < 0.01) return;
+  const cx = c.vpX * lw + camOx * -0.03;
+  const cy = c.vpY * lh + camOy * -0.03;
+  const md = Math.min(lw, lh);
+
+  // Faint connecting lines first
+  ctx.save();
+  ctx.strokeStyle = `rgba(140,170,220,${opacity * 0.06})`;
+  ctx.lineWidth = 0.8;
+  ctx.setLineDash([4, 6]);
+  for (const [a, b] of c.edges) {
+    const sa = c.stars[a], sb = c.stars[b];
+    ctx.beginPath();
+    ctx.moveTo(cx + sa.dx * md, cy + sa.dy * md);
+    ctx.lineTo(cx + sb.dx * md, cy + sb.dy * md);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Stars with glow
+  for (const s of c.stars) {
+    const sx = cx + s.dx * md;
+    const sy = cy + s.dy * md;
+    const sz = magToSize(s.mag) * 0.7;
+    const br = magToBrightness(s.mag);
+    const col = s.color || [220, 225, 245];
+    const sa = opacity * br;
+
+    // Soft glow
+    const gr = sz * 5;
+    const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, gr);
+    grd.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.15})`);
+    grd.addColorStop(0.3, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.04})`);
+    grd.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
+    ctx.beginPath(); ctx.arc(sx, sy, gr, 0, Math.PI * 2);
+    ctx.fillStyle = grd; ctx.fill();
+
+    // Scintillating core
+    const scint = 1 + 0.15 * Math.sin(time * 0.002 + s.dx * 100 + s.dy * 200);
+    ctx.beginPath(); ctx.arc(sx, sy, sz * scint, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${sa})`;
+    ctx.fill();
+  }
+}
+
+/* ================================================================
+   DEEP SKY OBJECT RENDERERS
+   ================================================================ */
+function drawAndromeda(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, size: number,
+  angle: number, opacity: number
+) {
+  if (opacity < 0.01) return;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+  // Extended disk — large tilted ellipse
+  ctx.save(); ctx.scale(1, 0.35);
+  const disk = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
+  disk.addColorStop(0, `rgba(255,240,200,${opacity * 0.12})`);
+  disk.addColorStop(0.08, `rgba(255,230,180,${opacity * 0.08})`);
+  disk.addColorStop(0.25, `rgba(200,190,170,${opacity * 0.04})`);
+  disk.addColorStop(0.5, `rgba(160,170,190,${opacity * 0.015})`);
+  disk.addColorStop(0.8, `rgba(130,140,170,${opacity * 0.005})`);
+  disk.addColorStop(1, `rgba(100,110,150,0)`);
+  ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
+  ctx.fillStyle = disk; ctx.fill();
+  ctx.restore();
+  // Bright core
+  ctx.save(); ctx.scale(1, 0.5);
+  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.12);
+  core.addColorStop(0, `rgba(255,245,220,${opacity * 0.35})`);
+  core.addColorStop(0.4, `rgba(255,235,190,${opacity * 0.15})`);
+  core.addColorStop(1, `rgba(230,210,170,0)`);
+  ctx.beginPath(); ctx.arc(0, 0, size * 0.12, 0, Math.PI * 2);
+  ctx.fillStyle = core; ctx.fill();
+  ctx.restore();
+  // Dust lane hint — dark streak across center
+  ctx.save(); ctx.scale(1, 0.15); ctx.rotate(0.1);
+  ctx.fillStyle = `rgba(5,5,15,${opacity * 0.08})`;
+  ctx.beginPath(); ctx.ellipse(0, 0, size * 0.5, size * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawPleiades(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, size: number,
+  opacity: number, time: number
+) {
+  if (opacity < 0.01) return;
+  // Blue reflection nebulosity
+  const neb = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 1.5);
+  neb.addColorStop(0, `rgba(100,140,255,${opacity * 0.06})`);
+  neb.addColorStop(0.3, `rgba(80,120,240,${opacity * 0.03})`);
+  neb.addColorStop(0.7, `rgba(60,90,200,${opacity * 0.008})`);
+  neb.addColorStop(1, `rgba(40,60,160,0)`);
+  ctx.beginPath(); ctx.arc(cx, cy, size * 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = neb; ctx.fill();
+  // 7 sisters — bright blue stars in tight cluster
+  const sisters = [
+    { dx: 0, dy: 0, mag: 2.87 },       // Alcyone
+    { dx: 0.28, dy: -0.18, mag: 3.63 }, // Atlas
+    { dx: -0.32, dy: -0.10, mag: 3.70 },// Electra
+    { dx: -0.15, dy: 0.30, mag: 3.87 }, // Maia
+    { dx: 0.22, dy: 0.25, mag: 4.18 },  // Merope
+    { dx: -0.28, dy: 0.22, mag: 4.30 }, // Taygeta
+    { dx: 0.35, dy: 0.05, mag: 5.09 },  // Pleione
+  ];
+  for (const s of sisters) {
+    const sx = cx + s.dx * size;
+    const sy = cy + s.dy * size;
+    const sz = magToSize(s.mag) * 0.5;
+    const br = magToBrightness(s.mag) * opacity;
+    const sc = 1 + 0.1 * Math.sin(time * 0.003 + s.dx * 50);
+    // Star glow
+    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, sz * 4);
+    g.addColorStop(0, `rgba(170,200,255,${br * 0.2})`);
+    g.addColorStop(0.5, `rgba(130,170,255,${br * 0.04})`);
+    g.addColorStop(1, `rgba(100,140,255,0)`);
+    ctx.beginPath(); ctx.arc(sx, sy, sz * 4, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill();
+    // Core
+    ctx.beginPath(); ctx.arc(sx, sy, sz * sc, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200,220,255,${br})`;
+    ctx.fill();
+  }
+}
+
+function drawOrionNebula(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, size: number,
+  opacity: number, _time: number
+) {
+  if (opacity < 0.01) return;
+  ctx.save(); ctx.translate(cx, cy);
+  // Main emission (pink/magenta + green)
+  ctx.save(); ctx.scale(1, 0.65);
+  const em = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
+  em.addColorStop(0, `rgba(255,200,210,${opacity * 0.15})`);
+  em.addColorStop(0.15, `rgba(230,160,180,${opacity * 0.10})`);
+  em.addColorStop(0.3, `rgba(180,120,160,${opacity * 0.06})`);
+  em.addColorStop(0.5, `rgba(100,140,130,${opacity * 0.03})`);
+  em.addColorStop(0.75, `rgba(60,100,120,${opacity * 0.01})`);
+  em.addColorStop(1, `rgba(40,60,80,0)`);
+  ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
+  ctx.fillStyle = em; ctx.fill();
+  ctx.restore();
+  // Green OIII emission zone
+  const g2 = ctx.createRadialGradient(size * 0.08, -size * 0.05, 0, size * 0.08, -size * 0.05, size * 0.4);
+  g2.addColorStop(0, `rgba(80,200,140,${opacity * 0.08})`);
+  g2.addColorStop(0.5, `rgba(60,160,120,${opacity * 0.03})`);
+  g2.addColorStop(1, `rgba(40,120,100,0)`);
+  ctx.beginPath(); ctx.arc(size * 0.08, -size * 0.05, size * 0.4, 0, Math.PI * 2);
+  ctx.fillStyle = g2; ctx.fill();
+  // Trapezium — 4 central stars
+  const trap = [
+    { dx: -0.03, dy: -0.02 }, { dx: 0.03, dy: -0.01 },
+    { dx: 0.01, dy: 0.03 }, { dx: -0.02, dy: 0.02 },
+  ];
+  for (const t of trap) {
+    const tx = t.dx * size, ty = t.dy * size;
+    ctx.beginPath(); ctx.arc(tx, ty, 1.2, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(220,230,255,${opacity * 0.6})`;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ================================================================
    COMPONENT
    ================================================================ */
 export function StarField() {
@@ -619,23 +882,51 @@ export function StarField() {
               const n4n = (n4 + 1) * 0.5;
               const riftDk = q1 < -0.15 ? Math.min(1, (-q1 - 0.15) * 4) : 0;
               const int = mw * n4n * 0.8 * (1 - riftDk * 0.85);
-              r += cfg.mwR * int; g += cfg.mwG * int; b += cfg.mwB * int;
+              // Multi-color MW: warm center → reddish-brown dust → cool blue edges
+              // mw is 0-1 where 1 = band center, use it as warmth factor
+              const warmth = mw * mw; // quadratic: concentrated warmth at center
+              const colorVar = (fbm(sx * 0.3 + 150, sy * 0.3 + 150, 3) + 1) * 0.5;
+              const coreR = cfg.mwR + 40 * warmth + 25 * colorVar;   // yellower core
+              const coreG = cfg.mwG - 20 * warmth + 15 * colorVar;   // less green at center
+              const coreB = cfg.mwB - 30 * warmth + 50 * (1 - warmth); // bluer at edges
+              // Reddish-brown dust tint in mid-band
+              const dustTint = colorVar > 0.6 ? (colorVar - 0.6) * 2.5 : 0;
+              r += (coreR + dustTint * 35) * int;
+              g += (coreG - dustTint * 15) * int;
+              b += (coreB - dustTint * 25) * int;
             }
 
+            // Dark nebulae
             const dn = fbm(sx * 0.6 + 400, sy * 0.6 + 400, 5);
             if (dn < -0.08) {
               const dk = Math.min(1, (-dn - 0.08) * 2.8);
               r *= 1 - dk * 0.78; g *= 1 - dk * 0.78; b *= 1 - dk * 0.78;
             }
 
+            // Great Rift — prominent dark lane along MW center
             const darkN = fbm(sx * 0.4 + 600, sy * 0.4 + 600, 4);
-            if (darkN > 0.35) {
-              const dk = Math.min(1, (darkN - 0.35) * 5);
-              r *= 1 - dk * 0.9; g *= 1 - dk * 0.9; b *= 1 - dk * 0.9;
+            if (darkN > 0.25) {  // lowered threshold from 0.35 → wider rift
+              const dk = Math.min(1, (darkN - 0.25) * 4);
+              const riftStr = mw > 0.1 ? dk * 0.92 : dk * 0.5; // stronger in MW band
+              r *= 1 - riftStr; g *= 1 - riftStr; b *= 1 - riftStr;
+            }
+            // Filamentary dark lanes (finer detail perpendicular to MW)
+            const filN = fbm(sx * 1.2 + 800, sy * 1.2 + 800, 3);
+            if (filN > 0.4 && mw > 0.05) {
+              const fil = Math.min(1, (filN - 0.4) * 3) * mw * 0.4;
+              r *= 1 - fil; g *= 1 - fil; b *= 1 - fil;
             }
 
             const bgn = (fbm(sx * 0.25 + 700, sy * 0.25 + 700, 3) + 1) * 0.5;
             r += bgn * 5; g += bgn * 3; b += bgn * 8;
+            // Star cloud brightness patches (dense luminous regions)
+            if (mw > 0.1) {
+              const scN = (fbm(sx * 0.5 + 900, sy * 0.5 + 900, 4) + 1) * 0.5;
+              if (scN > 0.65) {
+                const scInt = (scN - 0.65) * 2.86 * mw * 0.35;
+                r += 180 * scInt; g += 160 * scInt; b += 120 * scInt;
+              }
+            }
 
             // Vignette removed — texture tiles via drawWrapped, vignette created visible seams
 
@@ -908,12 +1199,15 @@ export function StarField() {
         else { x = Math.random() * w; y = Math.random() * h; }
         starsByLayer[3].push(make(x, y, Math.random() * 1.5 + 1.5, 3));
       }
-      // Layer 4: Feature
-      for (let i = 0; i < c.feat; i++)
-        starsByLayer[4].push(make(
+      // Layer 4: Feature (some are Cepheid variables)
+      for (let i = 0; i < c.feat; i++) {
+        const fs = make(
           Math.random() * w * 0.8 + w * 0.1,
           Math.random() * h * 0.6 + h * 0.08,
-          Math.random() * 1.5, 4));
+          Math.random() * 1.5, 4);
+        if (i < 3) fs.cepheidPeriod = 8 + Math.random() * 12; // 8-20s period
+        starsByLayer[4].push(fs);
+      }
       // Layer 5: Double stars
       for (let i = 0; i < c.dbl; i++) {
         const x = Math.random() * w * 0.7 + w * 0.15;
@@ -1101,6 +1395,36 @@ export function StarField() {
             coreGrd.addColorStop(1, "rgba(255,255,255,0)");
             sctx.beginPath(); sctx.arc(cx, cy, sz * 0.5, 0, Math.PI * 2);
             sctx.fillStyle = coreGrd; sctx.fill();
+
+            // Lens flare: horizontal streak + ghost circles
+            const flareLen = sz * 16;
+            const flareH = Math.max(0.8, sz * 0.12);
+            const flareA = 0.06;
+            // Horizontal streak
+            const hf = sctx.createLinearGradient(cx - flareLen, cy, cx + flareLen, cy);
+            hf.addColorStop(0, `rgba(${ri},${gi},${bi},0)`);
+            hf.addColorStop(0.3, `rgba(${ri},${gi},${bi},${flareA * 0.3})`);
+            hf.addColorStop(0.45, `rgba(255,255,255,${flareA})`);
+            hf.addColorStop(0.55, `rgba(255,255,255,${flareA})`);
+            hf.addColorStop(0.7, `rgba(${ri},${gi},${bi},${flareA * 0.3})`);
+            hf.addColorStop(1, `rgba(${ri},${gi},${bi},0)`);
+            sctx.fillStyle = hf;
+            sctx.fillRect(cx - flareLen, cy - flareH, flareLen * 2, flareH * 2);
+            // Ghost circles (lens artifacts)
+            const ghosts = [
+              { dx: sz * 5, r: sz * 1.2, a: 0.015 },
+              { dx: -sz * 7, r: sz * 0.8, a: 0.01 },
+              { dx: sz * 10, r: sz * 1.5, a: 0.008 },
+            ];
+            for (const gh of ghosts) {
+              const gg = sctx.createRadialGradient(cx + gh.dx, cy, 0, cx + gh.dx, cy, gh.r);
+              gg.addColorStop(0, `rgba(${ri},${gi},${bi},0)`);
+              gg.addColorStop(0.6, `rgba(${ri},${gi},${bi},${gh.a})`);
+              gg.addColorStop(0.8, `rgba(${ri},${gi},${bi},${gh.a * 0.5})`);
+              gg.addColorStop(1, `rgba(${ri},${gi},${bi},0)`);
+              sctx.beginPath(); sctx.arc(cx + gh.dx, cy, gh.r, 0, Math.PI * 2);
+              sctx.fillStyle = gg; sctx.fill();
+            }
           } else if (s.layer === 3 || s.layer === 5) {
             // Close/double: haze gradients + short spikes for bright stars
             sctx.globalCompositeOperation = "lighter";
@@ -1232,6 +1556,14 @@ export function StarField() {
         if (flashWave > 0.997) {
           alpha = clamp(alpha + (flashWave - 0.997) / 0.003 * 0.8, 0, 1);
         }
+      }
+
+      // Cepheid pulsation: slow periodic brightness + size variation
+      if (s.cepheidPeriod) {
+        const cephPhase = (t / s.cepheidPeriod) * Math.PI * 2;
+        // Asymmetric light curve: fast rise, slow decline (real Cepheids)
+        const cephWave = 0.5 + 0.3 * Math.sin(cephPhase) + 0.2 * Math.sin(cephPhase * 2 + 0.5);
+        alpha = clamp(alpha * (0.5 + cephWave * 0.8), 0, 1);
       }
 
       return alpha;
@@ -1501,6 +1833,70 @@ export function StarField() {
       if (wts[3] > 0.01) {
         ctx.save(); ctx.globalCompositeOperation = "lighter";
         drawPlanetaryNebula(ctx, lw * 0.35, lh * 0.45, md * 0.13, wts[3] * 0.5, time);
+        ctx.restore();
+      }
+    };
+
+    /* ---- Constellations + Deep Sky Objects ---- */
+    const drawConstellationsAndDSO = (wts: number[], time: number) => {
+      const md = Math.min(lw, lh);
+      // Constellations
+      for (const c of CONSTELLATIONS) {
+        let op = 0;
+        for (let i = 0; i < wts.length && i < c.zoneWeights.length; i++)
+          op = Math.max(op, wts[i] * c.zoneWeights[i]);
+        if (op > 0.01) drawConstellation(ctx, c, op * 0.8, lw, lh, time, smoothCameraX, smoothCameraY);
+      }
+      // Deep sky objects
+      for (const d of DEEP_SKY) {
+        let op = 0;
+        for (let i = 0; i < wts.length && i < d.zoneWeights.length; i++)
+          op = Math.max(op, wts[i] * d.zoneWeights[i]);
+        if (op < 0.01) continue;
+        const dx = d.vpX * lw + smoothCameraX * -0.03;
+        const dy = d.vpY * lh + smoothCameraY * -0.03;
+        const sz = d.size * md;
+        if (d.type === 'andromeda') drawAndromeda(ctx, dx, dy, sz, d.angle, op * 0.7);
+        else if (d.type === 'pleiades') drawPleiades(ctx, dx, dy, sz, op * 0.7, time);
+        else if (d.type === 'orion_nebula') drawOrionNebula(ctx, dx, dy, sz, op * 0.7, time);
+      }
+    };
+
+    /* ---- Zodiacal Light + Airglow ---- */
+    const drawAtmospheric = (wts: number[]) => {
+      // Zodiacal light — faint triangular glow from bottom center
+      // Strongest in Zone 0-1 (near "horizon")
+      const zodOp = Math.max(wts[0] * 0.8, wts[1] * 0.5, wts[4] * 0.6);
+      if (zodOp > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const zh = lh * 0.55;
+        const zg = ctx.createLinearGradient(lw * 0.5, lh, lw * 0.5, lh - zh);
+        zg.addColorStop(0, `rgba(255,230,180,${zodOp * 0.025})`);
+        zg.addColorStop(0.15, `rgba(240,210,150,${zodOp * 0.015})`);
+        zg.addColorStop(0.4, `rgba(200,180,130,${zodOp * 0.005})`);
+        zg.addColorStop(1, `rgba(160,140,100,0)`);
+        ctx.beginPath();
+        ctx.moveTo(lw * 0.2, lh);
+        ctx.lineTo(lw * 0.5, lh - zh);
+        ctx.lineTo(lw * 0.8, lh);
+        ctx.closePath();
+        ctx.fillStyle = zg; ctx.fill();
+        ctx.restore();
+      }
+      // Airglow — thin green-blue band at bottom edge
+      const agOp = Math.max(wts[1] * 0.6, wts[2] * 0.8, wts[3] * 0.5);
+      if (agOp > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const agH = lh * 0.08;
+        const ag = ctx.createLinearGradient(0, lh, 0, lh - agH);
+        ag.addColorStop(0, `rgba(80,180,120,${agOp * 0.02})`);
+        ag.addColorStop(0.3, `rgba(60,150,100,${agOp * 0.012})`);
+        ag.addColorStop(0.7, `rgba(40,120,80,${agOp * 0.004})`);
+        ag.addColorStop(1, `rgba(20,80,60,0)`);
+        ctx.fillStyle = ag;
+        ctx.fillRect(0, lh - agH, lw, agH);
         ctx.restore();
       }
     };
@@ -1837,6 +2233,9 @@ export function StarField() {
       // Special objects (skip when quality is very low)
       if (time !== undefined && qualityLevel > 0.3) drawSpecials(wts, time);
 
+      // Constellations & deep sky objects (behind star layers)
+      if (time !== undefined && qualityLevel > 0.3) drawConstellationsAndDSO(wts, time);
+
       // Galaxies
       for (const g of galaxies) drawGalObj(g, time ?? 0);
 
@@ -1855,6 +2254,9 @@ export function StarField() {
 
       // Color wash
       drawWash(wts);
+
+      // Atmospheric effects (zodiacal light, airglow)
+      if (!reduced) drawAtmospheric(wts);
 
       // Foreground dust particles (skip when quality low)
       if (!reduced && qualityLevel > 0.4) {
