@@ -1,0 +1,141 @@
+{
+  "nav": {
+    "services": "Services",
+    "cases": "Cases",
+    "about": "About",
+    "blog": "Blog",
+    "calculator": "Calculator",
+    "contact": "Contact",
+    "brand": "Moonlight"
+  },
+  "hero": {
+    "title": "Moonlight",
+    "title_line1": "MOON",
+    "title_line2": "LIGHT",
+    "subtitle": "Next-Gen IT Agency",
+    "description": "We build Telegram infrastructure, B2B platforms, visual management systems, and AI solutions for business",
+    "cta_primary": "Discuss a project",
+    "cta_secondary": "Our cases"
+  },
+  "services": {
+    "title": "Services",
+    "subtitle": "Full-cycle digital product development",
+    "telegram": {
+      "title": "Telegram Infrastructure",
+      "description": "Bots, mini apps, payment systems, CRM integrations, and Telegram business process automation",
+      "features": ["Telegram Bots", "Mini Apps", "Payment Systems", "CRM Integrations"]
+    },
+    "b2b": {
+      "title": "B2B Platforms",
+      "description": "Corporate portals, CRM systems, analytics dashboards, and business process automation",
+      "features": ["CRM Systems", "Analytics", "Portals", "Automation"]
+    },
+    "visual": {
+      "title": "Visual Systems",
+      "description": "Interactive diagrams, architecture builders, data visualization, and drag-and-drop interfaces",
+      "features": ["Builders", "Visualization", "Drag & Drop", "Interactive Diagrams"]
+    },
+    "ai": {
+      "title": "AI Integrations",
+      "description": "LLM integration, intelligent assistants, automated data processing, and content generation",
+      "features": ["LLM Integrations", "AI Assistants", "Data Processing", "Content Generation"]
+    }
+  },
+  "cases": {
+    "title": "Cases",
+    "subtitle": "Projects we're proud of",
+    "view_all": "All cases",
+    "view_case": "Learn more",
+    "back": "Back to cases"
+  },
+  "about": {
+    "title": "About Us",
+    "subtitle": "Team & approach",
+    "approach_title": "Our Approach",
+    "approach_description": "We believe in transparency, iterative development, and technological excellence. Every project starts with a deep dive into the client's business challenges.",
+    "team_title": "Team",
+    "tech_title": "Technologies"
+  },
+  "demo": {
+    "title": "How It Works",
+    "subtitle": "Interactive demonstration of a typical project architecture"
+  },
+  "blog": {
+    "title": "Blog",
+    "subtitle": "Articles about technology and development",
+    "view_all": "All articles",
+    "read_more": "Read more",
+    "back": "Back to blog",
+    "min_read": "min read"
+  },
+  "calculator": {
+    "title": "Project Calculator",
+    "subtitle": "Estimate your project cost in 2 minutes",
+    "cta_title": "Estimate Your Project Cost",
+    "cta_description": "Our calculator will help you estimate the budget and timeline for your project",
+    "cta_button": "Calculate cost",
+    "step1_title": "Project Type",
+    "step2_title": "Features",
+    "step3_title": "Timeline",
+    "step4_title": "Result",
+    "next": "Next",
+    "prev": "Back",
+    "send_to_telegram": "Send request",
+    "project_types": {
+      "telegram_bot": "Telegram Bot",
+      "web_app": "Web Application",
+      "b2b_platform": "B2B Platform",
+      "ai_integration": "AI Integration"
+    },
+    "features": {
+      "auth": "Authentication",
+      "payments": "Payments",
+      "admin_panel": "Admin Panel",
+      "analytics": "Analytics",
+      "api_integration": "API Integrations",
+      "ai_features": "AI Features",
+      "realtime": "Realtime",
+      "file_storage": "File Storage"
+    },
+    "timeline": {
+      "urgent": "Urgent (2-4 weeks)",
+      "normal": "Standard (1-2 months)",
+      "relaxed": "Relaxed (2-3 months)"
+    },
+    "sent": "Sent!",
+    "result": {
+      "estimated_cost": "Estimated Cost",
+      "estimated_time": "Estimated Timeline",
+      "disclaimer": "Exact estimate after discussing project details",
+      "weeks_short": "wks"
+    }
+  },
+  "telegram": {
+    "title": "Join Us on Telegram",
+    "description": "Follow our news, cases, and useful materials on our Telegram channel",
+    "cta_button": "Subscribe to channel"
+  },
+  "contact": {
+    "title": "Contact Us",
+    "subtitle": "Tell us about your project — we'll respond within 24 hours",
+    "name": "Name",
+    "email": "Email",
+    "telegram_handle": "Telegram",
+    "message": "Message",
+    "send": "Send",
+    "sending": "Sending...",
+    "success": "Message sent! We'll get back to you soon.",
+    "error": "Error sending message. Please try again or message us on Telegram."
+  },
+  "metadata": {
+    "title": "Moonlight — Next-Gen IT Agency",
+    "description": "Telegram infrastructure, B2B platforms, visual management systems, and AI solutions for business"
+  },
+  "footer": {
+    "brand": "Moonlight",
+    "description": "Next-gen IT agency. Telegram infrastructure, B2B platforms, visual systems, and AI solutions.",
+    "navigation": "Navigation",
+    "social": "Social",
+    "rights": "All rights reserved"
+  }
+}
