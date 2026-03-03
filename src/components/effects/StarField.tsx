@@ -72,6 +72,490 @@ function warpedNoise(
   return { val, q1, q2 };
 }
 
+/** Zone-specific warped noise — each warpStyle produces fundamentally different structure */
+function warpedNoiseZone(
+  x: number, y: number,
+  nb: ZoneNebConf
+): { val: number; q1: number; q2: number } {
+  const sx = x * nb.scale, sy = y * nb.scale;
+  const off = nb.noiseOff;
+  const oct = nb.octaves ?? 4;
+  const lac = nb.lacunarity ?? 2.0;
+  const style = nb.warpStyle ?? 'standard';
+  const wK = nb.warpK;
+
+  let val: number, q1: number, q2: number;
+
+  switch (style) {
+    case 'ridged': {
+      // Ridged multi-fractal — sharp creases and filaments
+      q1 = fbm(sx + off, sy + off, oct, lac);
+      q2 = fbm(sx + off + 73.1, sy + off - 47.6, oct, lac);
+      // Ridge: abs(noise) inverted → sharp valleys become sharp peaks
+      const r1 = 1 - Math.abs(fbm(sx + wK * q1, sy + wK * q2, oct + 1, lac));
+      const r2 = 1 - Math.abs(fbm(sx + wK * q2 + 19.4, sy + wK * q1 - 23.8, oct, lac));
+      val = r1 * r2; // multiply two ridge fields → creates intricate filamentary networks
+      break;
+    }
+    case 'turbulent': {
+      // Turbulence — absolute value fbm → cloud-like billows with sharp folds
+      q1 = fbm(sx + off + 111.7, sy + off - 88.3, oct, lac);
+      q2 = fbm(sx + off - 65.2, sy + off + 142.9, oct, lac);
+      let turb = 0, amp = 1, freq = 1, maxA = 0;
+      for (let i = 0; i < oct + 2; i++) {
+        turb += Math.abs(noise2d((sx + wK * q1) * freq, (sy + wK * q2) * freq)) * amp;
+        maxA += amp; amp *= 0.45; freq *= lac;
+      }
+      val = turb / maxA;
+      break;
+    }
+    case 'cellular': {
+      // Pseudo-Voronoi — creates bubble/cell-like structures
+      q1 = fbm(sx + off + 200.3, sy + off + 155.7, oct, lac);
+      q2 = fbm(sx + off - 178.4, sy + off + 210.1, oct, lac);
+      const wx = sx + wK * q1, wy = sy + wK * q2;
+      // Approximate Voronoi via min-distance to grid-jittered points
+      const gx = Math.floor(wx), gy = Math.floor(wy);
+      let minD = 8;
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+          const cx = gx + di + (noise2d((gx + di) * 13.7 + off, (gy + dj) * 17.3 + off) * 0.5 + 0.5);
+          const cy = gy + dj + (noise2d((gx + di) * 23.1 + off, (gy + dj) * 11.9 + off) * 0.5 + 0.5);
+          const dd = (wx - cx) * (wx - cx) + (wy - cy) * (wy - cy);
+          if (dd < minD) minD = dd;
+        }
+      }
+      val = 1 - Math.sqrt(minD);
+      break;
+    }
+    case 'marble': {
+      // Marble/veins — sinusoidal distortion of coordinates → banded organic veins
+      q1 = fbm(sx + off - 300.5, sy + off + 275.2, oct, lac);
+      q2 = fbm(sx + off + 320.8, sy + off - 290.4, oct, lac);
+      const phase = sx * 2.5 + sy * 1.8 + wK * (q1 + q2);
+      val = Math.sin(phase) * 0.5 + 0.5;
+      // Add secondary detail
+      val = val * 0.7 + fbm(sx + wK * q1 * 0.5, sy + wK * q2 * 0.5, oct, lac) * 0.3;
+      break;
+    }
+    default: {
+      // Standard domain warp (original algorithm, but using per-zone octaves/lacunarity)
+      q1 = fbm(sx + off, sy + off, oct, lac);
+      q2 = fbm(sx + off + 52.3, sy + off + 31.7, oct, lac);
+      val = fbm(sx + wK * q1, sy + wK * q2, oct + 1, lac);
+      break;
+    }
+  }
+
+  return { val, q1: q1!, q2: q2! };
+}
+
+/* ================================================================
+   ZONE-SPECIFIC NEBULA GENERATORS
+   Each zone has a fundamentally different geometric structure
+   so they are instantly distinguishable at a glance.
+   ================================================================ */
+
+/** Zone 0 — "Golden Veil": Diagonal swept filaments (Carina-like stellar wind).
+ *  Anisotropic noise stretched 4:1 along ~25° diagonal creates long fiber structures. */
+function genNebZone0(u32: Uint32Array, nw: number, nh: number, nb: ZoneNebConf) {
+  const off = nb.noiseOff;
+  const ang = 0.44; // ~25° sweep
+  const cosA = Math.cos(ang), sinA = Math.sin(ang);
+  const ang2 = 0.62; // secondary layer
+  const cosB = Math.cos(ang2), sinB = Math.sin(ang2);
+  for (let py = 0; py < nh; py++) {
+    for (let px = 0; px < nw; px++) {
+      const cx = (px - nw * 0.5) / nh, cy = (py - nh * 0.5) / nh;
+      // Rotate into sweep coordinate system
+      const rx = cx * cosA + cy * sinA;
+      const ry = -cx * sinA + cy * cosA;
+      // Anisotropic: thin perpendicular, long along sweep
+      const sx = rx * 22, sy = ry * 5.5;
+      // Domain warp
+      const w1 = fbm(sx + off, sy + off, 4, 2.1);
+      const w2 = fbm(sx + off + 47.3, sy + off + 29.1, 4, 2.1);
+      const v1 = fbm(sx + w1 * 2.8, sy + w2 * 1.0, 5, 2.0);
+      // Secondary layer at different angle
+      const rx2 = cx * cosB + cy * sinB, ry2 = -cx * sinB + cy * cosB;
+      const v2 = fbm(rx2 * 16 + off + 100, ry2 * 4.5 + off + 100, 4, 2.2);
+      const combined = v1 * 0.65 + v2 * 0.35;
+      const density = Math.pow(Math.max(0, combined * 0.5 + 0.5 + nb.density), nb.falloff);
+      const colorMix = clamp((w1 + 1) * 0.5, 0, 1);
+      const int = density * nb.peak;
+      const r = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255 + w2 * int * 0.08;
+      const g = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255 + w2 * int * 0.04;
+      const b = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255 - w2 * int * 0.03;
+      u32[py * nw + px] = (255 << 24) | (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) | clamp(r, 0, 255);
+    }
+  }
+}
+
+/** Zone 1 — "Emerald Reef": Aurora curtain bands (aurora borealis / Veil Nebula drapes).
+ *  sin(x * freq + noise_warp) creates vertical undulating bands at multiple frequencies. */
+function genNebZone1(u32: Uint32Array, nw: number, nh: number, nb: ZoneNebConf) {
+  const off = nb.noiseOff;
+  for (let py = 0; py < nh; py++) {
+    for (let px = 0; px < nw; px++) {
+      const nx = px / nw, ny = py / nh;
+      // Warp fields for curtain deformation
+      const warpX = fbm(nx * 3.5 + off, ny * 7 + off, 5, 2.2);
+      const warpY = fbm(nx * 5 + off + 77, ny * 1.5 + off + 33, 4, 2.0);
+      // Three curtain layers at different spacings
+      const p1 = (nx * 13 + warpX * 1.6 + warpY * 0.3) * Math.PI;
+      const p2 = (nx * 7.5 + warpX * 1.1 + 2.1) * Math.PI;
+      const p3 = (nx * 21 + warpX * 2.0 - 1.3) * Math.PI;
+      // Sharp peaks via high power of abs(sin)
+      const c1v = Math.pow(Math.abs(Math.sin(p1)), 4);
+      const c2v = Math.pow(Math.abs(Math.sin(p2)), 5) * 0.5;
+      const c3v = Math.pow(Math.abs(Math.sin(p3)), 6) * 0.2;
+      let val = c1v + c2v + c3v;
+      // Brightness variation along y
+      const yMod = fbm(nx * 0.8 + off + 200, ny * 6 + off + 200, 3, 2.0);
+      val *= clamp(yMod * 0.45 + 0.55, 0.2, 1.0);
+      // Subtle vertical fade (brighter near center)
+      val *= 1 - Math.pow(Math.abs(ny - 0.5) * 2, 3) * 0.3;
+      const density = Math.pow(clamp(val * 0.6, 0, 1), 1.8);
+      // Color: different curtain layers → different tints
+      const colorMix = clamp(c2v / (c1v + 0.05), 0, 1);
+      const int = density * nb.peak;
+      const accent = c3v * int * 0.15;
+      const r = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255 + accent * 0.2;
+      const g = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255 + accent * 0.6;
+      const b = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255 + accent * 0.9;
+      u32[py * nw + px] = (255 << 24) | (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) | clamp(r, 0, 255);
+    }
+  }
+}
+
+/** Zone 2 — "Ice Abyss": Broken concentric shell arcs (Vela SNR / planetary nebula).
+ *  sin(r * freq + angular_noise) creates rings, noise mask breaks them into arcs. */
+function genNebZone2(u32: Uint32Array, nw: number, nh: number, nb: ZoneNebConf) {
+  const off = nb.noiseOff;
+  // Off-center origin avoids bullseye look
+  const cx0 = 0.35, cy0 = 0.4;
+  for (let py = 0; py < nh; py++) {
+    for (let px = 0; px < nw; px++) {
+      const nx = px / nw - cx0, ny = py / nh - cy0;
+      const r = Math.sqrt(nx * nx + ny * ny);
+      const theta = Math.atan2(ny, nx);
+      // Angular noise breaks rings into arcs
+      const angN1 = fbm(theta * 2 + off, r * 10 + off, 5, 2.1);
+      const angN2 = fbm(theta * 3.5 + off + 100, r * 6 + off + 100, 4, 2.0);
+      // Perturbed radius for rings
+      const pertR = r * 14 + angN1 * 2.8 + angN2 * 1.5;
+      // Sharp rings via high-power abs(sin)
+      const ring1 = Math.pow(Math.abs(Math.sin(pertR * Math.PI)), 8);
+      const ring2 = Math.pow(Math.abs(Math.sin((pertR * 0.55 + 0.3) * Math.PI)), 6) * 0.45;
+      const ring3 = Math.pow(Math.abs(Math.sin((pertR * 1.7 + 0.7) * Math.PI)), 10) * 0.25;
+      // Arc masking — noise selectively dims ring portions
+      const arcMask = clamp(fbm(nx * 8 + off + 200, ny * 8 + off + 200, 4, 2.0) + 0.3, 0, 1);
+      let val = (ring1 + ring2 + ring3) * arcMask;
+      // Faint inter-ring emission glow
+      val += Math.exp(-r * r * 8) * 0.12;
+      // Radial falloff
+      val *= Math.exp(-r * r * 4);
+      const density = Math.pow(Math.max(0, val), nb.falloff * 0.5);
+      // Color: inner brighter, outer deeper
+      const colorMix = clamp(r * 2.5, 0, 1);
+      const int = density * nb.peak;
+      const highlight = ring1 * arcMask * Math.exp(-r * 3) * int * 0.1;
+      const rv = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255 + highlight * 0.3;
+      const gv = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255 + highlight * 0.6;
+      const bv = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255 + highlight;
+      u32[py * nw + px] = (255 << 24) | (clamp(bv, 0, 255) << 16) |
+        (clamp(gv, 0, 255) << 8) | clamp(rv, 0, 255);
+    }
+  }
+}
+
+/** Zone 3 — "Purple Rift": Veil Nebula branching filaments with pillar structures.
+ *  Three filament axes at crossing angles + dark absorption pillars create a rich
+ *  lacework of bright shock-front threads with visible directionality and depth.
+ *  Warm magenta/pink highlights on bright edges, deep violet in shadows. */
+function genNebZone3(u32: Uint32Array, nw: number, nh: number, nb: ZoneNebConf) {
+  const off = nb.noiseOff;
+  const nebRot = nb.rot ?? 0, nebAsp = nb.aspect ?? 1;
+  const cosR = Math.cos(nebRot), sinR = Math.sin(nebRot);
+  // Three filament directions for branching network
+  const ang2 = nebRot + 0.55;
+  const cos2 = Math.cos(ang2), sin2 = Math.sin(ang2);
+  const ang3 = nebRot - 0.4;
+  const cos3 = Math.cos(ang3), sin3 = Math.sin(ang3);
+
+  for (let py = 0; py < nh; py++) {
+    for (let px = 0; px < nw; px++) {
+      const cx = (px - nw * 0.5) / nh;
+      const cy = (py - nh * 0.5) / nh;
+
+      // Three rotated axes
+      const rx1 = cx * cosR + cy * sinR;
+      const ry1 = (-cx * sinR + cy * cosR) * nebAsp;
+      const rx2 = cx * cos2 + cy * sin2;
+      const ry2 = (-cx * sin2 + cy * cos2) * 1.3;
+      const rx3 = cx * cos3 + cy * sin3;
+      const ry3 = (-cx * sin3 + cy * cos3) * 1.1;
+
+      // Strong domain warp for dramatic curvature
+      const w1 = fbm(rx1 * 6 + off, ry1 * 6 + off, 5, 2.2);
+      const w2 = fbm(rx1 * 4.5 + off + 91.3, ry1 * 8 + off - 63.7, 4, 2.1);
+      const w3 = fbm(rx2 * 7 + off + 200, ry2 * 5 + off + 150, 4, 2.3);
+      const w4 = fbm(rx3 * 5 + off + 400, ry3 * 7 + off + 350, 4, 2.0);
+
+      // Warped perpendicular coords — strong warp = dramatic bends
+      const wy1 = ry1 + w1 * 0.18 + w2 * 0.09;
+      const wy2 = ry2 + w3 * 0.15 + w1 * 0.06;
+      const wy3 = ry3 + w4 * 0.13 + w2 * 0.05;
+
+      // --- Primary filaments: bold shock-front threads ---
+      const p1 = (wy1 * 7 + w1 * 2.2) * Math.PI;
+      const fil1 = Math.pow(1 - Math.abs(Math.sin(p1)), 4);
+      // Paired companion thread (double-strand structure)
+      const p1b = (wy1 * 7 + w1 * 2.2 + 0.06) * Math.PI;
+      const fil1b = Math.pow(1 - Math.abs(Math.sin(p1b)), 5) * 0.45;
+
+      // --- Secondary filaments: crossing branches ---
+      const p2 = (wy2 * 5.5 + w3 * 1.8) * Math.PI;
+      const fil2 = Math.pow(1 - Math.abs(Math.sin(p2)), 3) * 0.4;
+
+      // --- Tertiary filaments: fine crossing wisps ---
+      const p3 = (wy3 * 6.5 + w4 * 1.5) * Math.PI;
+      const fil3 = Math.pow(1 - Math.abs(Math.sin(p3)), 5) * 0.25;
+
+      // --- Ridged sub-structure within primary filaments ---
+      // High-freq ridge overlaid on primary for internal texture
+      const ridge = (1 - Math.abs(fbm(rx1 * 14 + w1 * 3 + off, ry1 * 14 + w2 * 2 + off, 3, 2.5)));
+      const ridgeMod = ridge * ridge * 0.3;
+
+      // Combine: filaments + knots at intersections + ridge detail
+      let val = fil1 * (1 + ridgeMod) + fil1b + fil2 + fil3
+        + fil1 * fil2 * 5 + fil1 * fil3 * 3;
+
+      // --- Dark absorption pillars: elongated dark columns ---
+      const pillarN = fbm(cx * 3 + off + 300, cy * 6 + off + 300, 5, 2.0);
+      const pillar = clamp(pillarN * 1.1 + 0.3, 0.03, 1.0);
+      val *= pillar;
+
+      // --- Soft central emission glow ---
+      const gcx = cx + 0.05, gcy = cy - 0.03;
+      val += Math.exp(-(gcx * gcx + gcy * gcy) * 6) * 0.12;
+
+      // --- Wide asymmetric radial envelope ---
+      const fd = Math.sqrt((cx + 0.08) * (cx + 0.08) + (cy - 0.04) * (cy - 0.04));
+      val *= clamp(1.5 - fd * 1.4, 0, 1);
+
+      const density = Math.pow(clamp(val, 0, 1), 1.1);
+
+      // --- Color: deep violet → hot magenta, warm pink highlights ---
+      const colorMix = clamp((fil2 + fil3) / (fil1 + 0.12) + w2 * 0.15, 0, 1);
+      const int = density * nb.peak;
+      // Warm magenta/pink highlight on brightest filament peaks
+      const hotSpot = clamp(fil1 * pillar, 0, 1) * int * 0.1;
+
+      const r = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255 + hotSpot * 1.2;
+      const g = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255 + hotSpot * 0.15;
+      const b = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255 + hotSpot * 0.4;
+
+      u32[py * nw + px] = (255 << 24) | (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) | clamp(r, 0, 255);
+    }
+  }
+}
+
+/** Zone 4 — "Edge of Universe": Voronoi void cells (N44 superbubble / cosmic voids).
+ *  F2-F1 Voronoi → bright cell boundaries, dark interiors. Sparse and desolate. */
+function genNebZone4(u32: Uint32Array, nw: number, nh: number, nb: ZoneNebConf) {
+  const off = nb.noiseOff;
+  for (let py = 0; py < nh; py++) {
+    for (let px = 0; px < nw; px++) {
+      const sx = px * 0.009, sy = py * 0.009;
+      // Domain warp for organic cell shapes
+      const w1 = fbm(sx + off + 200, sy + off + 155, 4, 2.0);
+      const w2 = fbm(sx + off - 178, sy + off + 210, 4, 2.0);
+      const wx = sx + w1 * 1.8, wy = sy + w2 * 1.8;
+      // Voronoi: find F1 (nearest) and F2 (second nearest)
+      const gx = Math.floor(wx), gy = Math.floor(wy);
+      let f1 = 99, f2 = 99;
+      for (let di = -2; di <= 2; di++) {
+        for (let dj = -2; dj <= 2; dj++) {
+          const ci = gx + di, cj = gy + dj;
+          const ccx = ci + (noise2d(ci * 13.7 + off, cj * 17.3 + off) * 0.5 + 0.5);
+          const ccy = cj + (noise2d(ci * 23.1 + off, cj * 11.9 + off) * 0.5 + 0.5);
+          const dd = Math.sqrt((wx - ccx) ** 2 + (wy - ccy) ** 2);
+          if (dd < f1) { f2 = f1; f1 = dd; }
+          else if (dd < f2) { f2 = dd; }
+        }
+      }
+      // F2-F1: 0 at cell boundaries → bright rims via Gaussian peak
+      const edge = f2 - f1;
+      const rim = Math.exp(-edge * edge * 35) * 0.9;
+      const inner = Math.pow(Math.max(0, 1 - f1 * 1.5), 3) * 0.06;
+      const fineDetail = Math.max(0, fbm(wx * 3 + off + 500, wy * 3 + off + 500, 3, 2.0)) * 0.04;
+      const val = rim + inner + fineDetail;
+      const density = Math.pow(Math.max(0, val), nb.falloff * 0.4);
+      const colorMix = clamp(edge * 3, 0, 1);
+      const int = density * nb.peak;
+      const rv = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255;
+      const gv = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255;
+      const bv = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255;
+      u32[py * nw + px] = (255 << 24) | (clamp(bv, 0, 255) << 16) |
+        (clamp(gv, 0, 255) << 8) | clamp(rv, 0, 255);
+    }
+  }
+}
+
+/* ================================================================
+   DSO POST-PROCESSING — glow/bloom and tone mapping
+   Applied to each DSO texture after pixel generation for photographic look
+   ================================================================ */
+
+/** Filmic tone mapping (Uncharted 2) — prevents flat washed-out colors */
+function filmicTonemap(x: number): number {
+  const A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
+  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+function tonemap(v: number): number {
+  const W = 2.5; // white point
+  return filmicTonemap(v) / filmicTonemap(W);
+}
+
+/** Box blur helper — 3-pass separable (H+V) ≈ gaussian.
+ *  Operates in-place on the provided canvas context. */
+function boxBlur3Pass(bCtx: CanvasRenderingContext2D, sw: number, sh: number, blurRadius: number) {
+  for (let pass = 0; pass < 3; pass++) {
+    const imgD = bCtx.getImageData(0, 0, sw, sh);
+    const src = new Uint8ClampedArray(imgD.data);
+    const dst = imgD.data;
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        let rS = 0, gS = 0, bS = 0, aS = 0, cnt = 0;
+        for (let kx = -blurRadius; kx <= blurRadius; kx++) {
+          const sx2 = Math.min(sw - 1, Math.max(0, x + kx));
+          const i = (y * sw + sx2) * 4;
+          rS += src[i]; gS += src[i + 1]; bS += src[i + 2]; aS += src[i + 3]; cnt++;
+        }
+        const oi = (y * sw + x) * 4;
+        dst[oi] = (rS / cnt) | 0; dst[oi + 1] = (gS / cnt) | 0;
+        dst[oi + 2] = (bS / cnt) | 0; dst[oi + 3] = (aS / cnt) | 0;
+      }
+    }
+    bCtx.putImageData(imgD, 0, 0);
+    const imgD2 = bCtx.getImageData(0, 0, sw, sh);
+    const src2 = new Uint8ClampedArray(imgD2.data);
+    const dst2 = imgD2.data;
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        let rS = 0, gS = 0, bS = 0, aS = 0, cnt = 0;
+        for (let ky = -blurRadius; ky <= blurRadius; ky++) {
+          const sy2 = Math.min(sh - 1, Math.max(0, y + ky));
+          const i = (sy2 * sw + x) * 4;
+          rS += src2[i]; gS += src2[i + 1]; bS += src2[i + 2]; aS += src2[i + 3]; cnt++;
+        }
+        const oi = (y * sw + x) * 4;
+        dst2[oi] = (rS / cnt) | 0; dst2[oi + 1] = (gS / cnt) | 0;
+        dst2[oi + 2] = (bS / cnt) | 0; dst2[oi + 3] = (aS / cnt) | 0;
+      }
+    }
+    bCtx.putImageData(imgD2, 0, 0);
+  }
+}
+
+/** Dual-radius chromatic bloom for photographic DSO quality.
+ *  Pass 1: sharp inner glow (small radius) — retains detail.
+ *  Pass 2: soft outer halo (large radius) — ethereal atmosphere.
+ *  Blue channel blooms slightly wider for subtle chromatic fringing. */
+function applyDSOGlow(canvas: HTMLCanvasElement, radius: number = 8, strength: number = 0.35): HTMLCanvasElement {
+  const w = canvas.width, h = canvas.height;
+  if (w < 4 || h < 4) return canvas;
+
+  // Downscale 4x for sharp bloom, 8x for soft halo
+  const ds1 = 4, ds2 = 8;
+  const sw1 = Math.max(2, (w / ds1) | 0), sh1 = Math.max(2, (h / ds1) | 0);
+  const sw2 = Math.max(2, (w / ds2) | 0), sh2 = Math.max(2, (h / ds2) | 0);
+
+  // Sharp inner bloom
+  const blurC1 = document.createElement("canvas");
+  blurC1.width = sw1; blurC1.height = sh1;
+  const bCtx1 = blurC1.getContext("2d")!;
+  bCtx1.drawImage(canvas, 0, 0, sw1, sh1);
+  boxBlur3Pass(bCtx1, sw1, sh1, Math.max(1, (radius / ds1) | 0));
+
+  // Soft outer halo (larger downscale = wider effective blur)
+  const blurC2 = document.createElement("canvas");
+  blurC2.width = sw2; blurC2.height = sh2;
+  const bCtx2 = blurC2.getContext("2d")!;
+  bCtx2.drawImage(canvas, 0, 0, sw2, sh2);
+  boxBlur3Pass(bCtx2, sw2, sh2, Math.max(1, ((radius * 1.5) / ds2) | 0));
+
+  // Composite: original + inner bloom + outer halo
+  const outC = document.createElement("canvas");
+  outC.width = w; outC.height = h;
+  const oCtx = outC.getContext("2d")!;
+  oCtx.drawImage(canvas, 0, 0);
+  oCtx.globalCompositeOperation = "lighter";
+  // Sharp inner bloom layer
+  oCtx.globalAlpha = strength;
+  oCtx.drawImage(blurC1, 0, 0, w, h);
+  // Soft outer halo — very restrained to avoid foggy band
+  oCtx.globalAlpha = strength * 0.3;
+  oCtx.drawImage(blurC2, 0, 0, w, h);
+  // Chromatic fringe: subtle blue channel expansion (very restrained)
+  oCtx.globalAlpha = strength * 0.08;
+  oCtx.drawImage(blurC2, -w * 0.008, -h * 0.008, w * 1.016, h * 1.016);
+  oCtx.globalAlpha = 1;
+  oCtx.globalCompositeOperation = "source-over";
+  return outC;
+}
+
+/** Scatter resolved field stars into a DSO texture (2nd pass).
+ *  Mimics the field stars visible through/around nebulae in real astrophotography. */
+function addEmbeddedStars(canvas: HTMLCanvasElement, count: number, brightness: number): void {
+  const ctx = canvas.getContext("2d")!;
+  const w = canvas.width, h = canvas.height;
+  const cx = w / 2, cy = h / 2;
+  const maxR = Math.min(w, h) * 0.45;
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const rad = Math.pow(Math.random(), 0.7) * maxR; // slight center bias
+    const x = cx + Math.cos(angle) * rad;
+    const y = cy + Math.sin(angle) * rad;
+    const sz = 0.3 + Math.random() * 0.7;
+    const br = brightness * (0.3 + Math.random() * 0.7);
+    // Spectral variation: warm to cool
+    const temp = Math.random();
+    const sr = 200 + temp * 55, sg = 210 + temp * 40, sb = 220 + (1 - temp) * 35;
+    // Soft glow halo
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, sz * 3.5);
+    grad.addColorStop(0, `rgba(${sr | 0},${sg | 0},${sb | 0},${br * 0.35})`);
+    grad.addColorStop(0.4, `rgba(${sr | 0},${sg | 0},${sb | 0},${br * 0.08})`);
+    grad.addColorStop(1, `rgba(${sr | 0},${sg | 0},${sb | 0},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, sz * 3.5, 0, Math.PI * 2); ctx.fill();
+    // Bright core
+    ctx.fillStyle = `rgba(255,255,255,${br * 0.6})`;
+    ctx.beginPath(); ctx.arc(x, y, sz * 0.4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+/** Add subtle astrophoto grain/noise texture to a DSO canvas.
+ *  Simulates CCD sensor noise at very low opacity for photographic feel. */
+function addAstroGrain(canvas: HTMLCanvasElement, intensity: number = 0.04): void {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const w = canvas.width, h = canvas.height;
+  const imgD = ctx.getImageData(0, 0, w, h);
+  const d = imgD.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 5) continue; // skip transparent pixels
+    const grain = (Math.random() - 0.5) * 255 * intensity;
+    d[i] = clamp(d[i] + grain, 0, 255);
+    d[i + 1] = clamp(d[i + 1] + grain * 0.9, 0, 255);
+    d[i + 2] = clamp(d[i + 2] + grain * 1.1, 0, 255); // blue channel slightly noisier
+  }
+  ctx.putImageData(imgD, 0, 0);
+}
+
 /* ================================================================
    SPECTRAL STAR COLORS (Morgan-Keenan classification)
    Real RGB values from blackbody radiation / CIE color matching
@@ -209,6 +693,22 @@ interface ShootingStar {
   color: [number, number, number];
 }
 
+interface Satellite {
+  x: number; y: number;
+  vx: number; vy: number;
+  life: number; maxLife: number;
+  brightness: number;
+  flareTime: number; // fraction of life when Iridium flare occurs
+}
+
+interface Comet {
+  x: number; y: number;
+  vx: number; vy: number;
+  life: number; maxLife: number;
+  dustAngle: number;  // curved dust tail offset angle
+  tailLen: number;    // ion tail length
+}
+
 interface DustParticle {
   x: number; y: number;
   size: number;
@@ -231,11 +731,17 @@ interface MWWisp {
 /* ================================================================
    ZONE DEFINITIONS — each zone = a unique region of space
    ================================================================ */
+type WarpStyle = 'standard' | 'ridged' | 'turbulent' | 'cellular' | 'marble';
 interface ZoneNebConf {
   noiseOff: number; scale: number; warpK: number;
   density: number; falloff: number;
   c1: [number, number, number]; c2: [number, number, number];
   peak: number; // max RGB output
+  rot?: number;  // noise-space rotation (radians) for structural uniqueness
+  aspect?: number; // noise-space stretch (1 = isotropic)
+  octaves?: number;    // fbm octaves (default 4)
+  lacunarity?: number; // frequency multiplier per octave (default 2.0)
+  warpStyle?: WarpStyle; // noise algorithm variant
 }
 
 interface UniverseZone {
@@ -246,7 +752,7 @@ interface UniverseZone {
 }
 
 const ZONES: UniverseZone[] = [
-  // Zone 0 — "Golden Veil" (Hero): warm H-alpha emission
+  // Zone 0 — "Golden Veil" (Hero): warm H-alpha emission — standard warp, smooth billows
   {
     scrollStart: 0, scrollEnd: 0.32,
     colorWash: [255, 180, 80], washOp: 0.03,
@@ -255,55 +761,60 @@ const ZONES: UniverseZone[] = [
       noiseOff: 0, scale: 0.008, warpK: 3.5,
       density: 0.15, falloff: 2.8,
       c1: [255, 130, 60], c2: [200, 80, 45],
-      peak: 140,
+      peak: 140, rot: 0, aspect: 1.0,
+      warpStyle: 'standard', octaves: 5, lacunarity: 2.0,
     },
   },
-  // Zone 1 — "Emerald Reef" (Services): OIII star-forming region
+  // Zone 1 — "Emerald Reef" (Services): OIII — turbulent cloud billows (abs-value folded noise)
   {
     scrollStart: 0.08, scrollEnd: 0.48,
     colorWash: [40, 190, 130], washOp: 0.025,
     starBrightMod: 1.0,
     neb: {
-      noiseOff: 100, scale: 0.01, warpK: 4.0,
+      noiseOff: 1337, scale: 0.012, warpK: 3.0,
       density: 0.12, falloff: 2.6,
       c1: [45, 210, 140], c2: [70, 175, 200],
-      peak: 125,
+      peak: 125, rot: 0.65, aspect: 1.3,
+      warpStyle: 'turbulent', octaves: 6, lacunarity: 2.2,
     },
   },
-  // Zone 2 — "Ice Abyss" (Cases): blue reflection nebula
+  // Zone 2 — "Ice Abyss" (Cases): blue — marble veins (sinusoidal banded structure)
   {
     scrollStart: 0.25, scrollEnd: 0.65,
     colorWash: [50, 85, 200], washOp: 0.035,
     starBrightMod: 0.82,
     neb: {
-      noiseOff: 200, scale: 0.007, warpK: 2.8,
+      noiseOff: 4219, scale: 0.005, warpK: 1.8,
       density: 0.10, falloff: 3.2,
       c1: [40, 80, 210], c2: [25, 45, 155],
-      peak: 115,
+      peak: 115, rot: -0.4, aspect: 0.8,
+      warpStyle: 'marble', octaves: 5, lacunarity: 1.9,
     },
   },
-  // Zone 3 — "Purple Rift" (About + Demo): dramatic nebula
+  // Zone 3 — "Purple Rift" (About + Demo): Veil Nebula branching filaments (shock-front threads)
   {
     scrollStart: 0.42, scrollEnd: 0.85,
     colorWash: [140, 50, 180], washOp: 0.03,
     starBrightMod: 0.88,
     neb: {
-      noiseOff: 300, scale: 0.009, warpK: 4.2,
-      density: 0.18, falloff: 2.4,
-      c1: [165, 55, 190], c2: [200, 80, 140],
-      peak: 145,
+      noiseOff: 7891, scale: 0.007, warpK: 4.5,
+      density: 0.10, falloff: 2.8,
+      c1: [140, 25, 225], c2: [235, 50, 155],
+      peak: 105, rot: 1.2, aspect: 1.5,
+      warpStyle: 'ridged', octaves: 5, lacunarity: 2.3,
     },
   },
-  // Zone 4 — "Edge of Universe" (Blog + Footer): near void
+  // Zone 4 — "Edge of Universe" (Blog + Footer): cellular void bubbles
   {
     scrollStart: 0.60, scrollEnd: 1.0,
     colorWash: [12, 12, 35], washOp: 0.05,
     starBrightMod: 0.3,
     neb: {
-      noiseOff: 400, scale: 0.005, warpK: 1.5,
+      noiseOff: 12345, scale: 0.004, warpK: 1.5,
       density: 0.04, falloff: 4.0,
       c1: [22, 28, 65], c2: [12, 18, 45],
-      peak: 35,
+      peak: 35, rot: -0.8, aspect: 1.1,
+      warpStyle: 'cellular', octaves: 4, lacunarity: 2.0,
     },
   },
 ];
@@ -318,6 +829,7 @@ interface ConstellationDef {
   stars: { dx: number; dy: number; mag: number; color?: [number, number, number] }[];
   edges: [number, number][];   // index pairs for connecting lines
 }
+interface ConstLineSprite { canvas: HTMLCanvasElement; ox: number; oy: number }
 
 const CONSTELLATIONS: ConstellationDef[] = [
   // Cassiopeia — W shape, upper right, Zone 0-1
@@ -369,24 +881,39 @@ const CONSTELLATIONS: ConstellationDef[] = [
 /* ================================================================
    DEEP SKY OBJECTS — galaxies, nebulae, clusters tied to zones
    ================================================================ */
+type DsoType =
+  | 'andromeda' | 'pleiades' | 'orion_nebula'
+  | 'crab_nebula' | 'eagle_nebula' | 'ring_nebula' | 'lagoon_nebula'
+  | 'whirlpool' | 'horsehead' | 'omega_nebula' | 'triangulum'
+  | 'helix_nebula' | 'sombrero' | 'butterfly_nebula' | 'rosette_nebula';
+
 interface DeepSkyDef {
-  vpX: number; vpY: number;
-  zoneWeights: number[];
-  type: 'andromeda' | 'pleiades' | 'orion_nebula';
+  vpX: number; vpY: number;   // position on the MW layer (0-1 viewport fractions)
+  type: DsoType;
   size: number;   // fraction of min(lw,lh)
   angle: number;  // rotation
+  depth: 0 | 1 | 2; // 0=deepest (galaxies), 1=mid (large nebulae), 2=nearest (compact)
 }
 
 const DEEP_SKY: DeepSkyDef[] = [
-  // Andromeda Galaxy (M31) — Zone 3, upper-left
-  { vpX: 0.25, vpY: 0.28, zoneWeights: [0, 0, 0.2, 1, 0.4],
-    type: 'andromeda', size: 0.18, angle: -0.65 },
-  // Pleiades (M45) — Zone 1, right-center
-  { vpX: 0.82, vpY: 0.48, zoneWeights: [0.3, 1, 0.4, 0, 0],
-    type: 'pleiades', size: 0.08, angle: 0 },
-  // Orion Nebula (M42) — Zone 1-2, below Orion's belt
-  { vpX: 0.282, vpY: 0.48, zoneWeights: [0, 0.6, 1, 0.3, 0],
-    type: 'orion_nebula', size: 0.06, angle: 0.2 },
+  // depth 2 — nearest (compact objects): faster drift, drawn after zone nebulae
+  { vpX: 0.08, vpY: 0.12, type: 'crab_nebula', size: 0.06, angle: 0.3, depth: 2 },
+  { vpX: 0.82, vpY: 0.08, type: 'pleiades', size: 0.10, angle: 0, depth: 2 },
+  { vpX: 0.35, vpY: 0.78, type: 'ring_nebula', size: 0.045, angle: 0.4, depth: 2 },
+  { vpX: 0.65, vpY: 0.72, type: 'butterfly_nebula', size: 0.06, angle: 0.6, depth: 2 },
+  { vpX: 0.18, vpY: 0.88, type: 'helix_nebula', size: 0.08, angle: 0.15, depth: 2 },
+  // depth 1 — mid (large nebulae): moderate drift, drawn after deep field
+  { vpX: 0.45, vpY: 0.05, type: 'lagoon_nebula', size: 0.08, angle: -0.1, depth: 1 },
+  { vpX: 0.25, vpY: 0.38, type: 'orion_nebula', size: 0.10, angle: 0.2, depth: 1 },
+  { vpX: 0.70, vpY: 0.32, type: 'horsehead', size: 0.07, angle: 0, depth: 1 },
+  { vpX: 0.50, vpY: 0.55, type: 'eagle_nebula', size: 0.09, angle: -0.15, depth: 1 },
+  { vpX: 0.10, vpY: 0.62, type: 'omega_nebula', size: 0.07, angle: 0.5, depth: 1 },
+  { vpX: 0.05, vpY: 0.42, type: 'rosette_nebula', size: 0.09, angle: 0, depth: 1 },
+  // depth 0 — deepest (galaxies): slowest drift, drawn right after MW
+  { vpX: 0.88, vpY: 0.82, type: 'andromeda', size: 0.18, angle: -0.65, depth: 0 },
+  { vpX: 0.88, vpY: 0.48, type: 'whirlpool', size: 0.09, angle: 0.7, depth: 0 },
+  { vpX: 0.55, vpY: 0.92, type: 'sombrero', size: 0.08, angle: -0.12, depth: 0 },
+  { vpX: 0.78, vpY: 0.18, type: 'triangulum', size: 0.09, angle: -0.4, depth: 0 },
 ];
 
 /* ================================================================
@@ -605,7 +1132,10 @@ function drawStarFormingKnots(
 }
 
 /* ================================================================
-   CONSTELLATION RENDERER
+   CONSTELLATION RENDERER — cinematic long-exposure style
+   Lines: pre-rendered sprites (with full shadowBlur, generated once at init).
+   Stars: drawn live for scintillation/pulsation (2 radial gradients each).
+   Cost per frame: 1 drawImage + ~40 gradient fills for 3 constellations.
    ================================================================ */
 function drawConstellation(
   ctx: CanvasRenderingContext2D,
@@ -614,196 +1144,1572 @@ function drawConstellation(
   lw: number, lh: number,
   time: number,
   camOx: number, camOy: number,
+  lineSprite?: ConstLineSprite,
 ) {
   if (opacity < 0.01) return;
   const cx = c.vpX * lw + camOx * -0.03;
   const cy = c.vpY * lh + camOy * -0.03;
   const md = Math.min(lw, lh);
+  const ts = time * 0.001;
 
-  // Connecting lines
   ctx.save();
-  ctx.strokeStyle = `rgba(140,175,230,${opacity * 0.22})`;
-  ctx.lineWidth = 1;
-  ctx.setLineDash([6, 8]);
-  for (const [a, b] of c.edges) {
-    const sa = c.stars[a], sb = c.stars[b];
-    ctx.beginPath();
-    ctx.moveTo(cx + sa.dx * md, cy + sa.dy * md);
-    ctx.lineTo(cx + sb.dx * md, cy + sb.dy * md);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.restore();
+  ctx.globalCompositeOperation = "lighter";
 
-  // Stars with glow
-  for (const s of c.stars) {
-    const sx = cx + s.dx * md;
-    const sy = cy + s.dy * md;
-    const sz = magToSize(s.mag) * 1.1;
+  /* ---- LINES from pre-rendered sprite (shadowBlur baked in at init) ---- */
+  if (lineSprite) {
+    const breathe = 1 + 0.12 * Math.sin(ts * 0.785 + c.vpX * 100 + c.vpY * 200);
+    ctx.globalAlpha = clamp(opacity * breathe, 0, 1);
+    ctx.drawImage(lineSprite.canvas, cx - lineSprite.ox, cy - lineSprite.oy);
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---- STARS — 3-layer glow + spikes (live for animation) ---- */
+  for (let i = 0; i < c.stars.length; i++) {
+    const s = c.stars[i];
+    const x = cx + s.dx * md;
+    const y = cy + s.dy * md;
+    const col = s.color || [200, 210, 240];
     const br = magToBrightness(s.mag);
-    const col = s.color || [220, 225, 245];
-    const sa = Math.min(1, opacity * br * 1.8);
+    const sz = magToSize(s.mag) * 1.2;
+    const phase = s.dx * 137.5 + s.dy * 251.3 + i * 0.73;
+    const sa = clamp(opacity * br * 2.2, 0, 1);
 
-    // Large glow halo
-    const gr = sz * 8;
-    const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, gr);
-    grd.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.35})`);
-    grd.addColorStop(0.2, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.12})`);
-    grd.addColorStop(0.5, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.03})`);
-    grd.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
-    ctx.beginPath(); ctx.arc(sx, sy, gr, 0, Math.PI * 2);
-    ctx.fillStyle = grd; ctx.fill();
+    // Scintillation + subtle size pulsation
+    const scint = 1 + 0.12 * Math.sin(ts * 2.0 + phase * 3.1);
+    const sizePulse = 1 + 0.05 * Math.sin(ts * 1.047 + phase * 1.7);
+    const curSz = sz * scint * sizePulse;
 
-    // Scintillating core
-    const scint = 1 + 0.15 * Math.sin(time * 0.002 + s.dx * 100 + s.dy * 200);
-    ctx.beginPath(); ctx.arc(sx, sy, sz * scint, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${Math.min(255, col[0] + 30)},${Math.min(255, col[1] + 30)},${Math.min(255, col[2] + 30)},${sa})`;
-    ctx.fill();
-    // White-hot center
-    ctx.beginPath(); ctx.arc(sx, sy, sz * 0.5, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255,255,255,${sa * 0.8})`;
-    ctx.fill();
+    // Layer 1: Outer halo (sz*7) — smooth atmospheric falloff
+    const outerR = curSz * 7;
+    const gO = ctx.createRadialGradient(x, y, 0, x, y, outerR);
+    gO.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.14})`);
+    gO.addColorStop(0.2, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.06})`);
+    gO.addColorStop(0.5, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.015})`);
+    gO.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
+    ctx.fillStyle = gO;
+    ctx.beginPath(); ctx.arc(x, y, outerR, 0, Math.PI * 2); ctx.fill();
+
+    // Layer 2: Core + inner glow (sz*3) — white-hot center → spectral color
+    const coreR = curSz * 3;
+    const bR = Math.min(255, col[0] + 40);
+    const bG = Math.min(255, col[1] + 40);
+    const bB = Math.min(255, col[2] + 40);
+    const gC = ctx.createRadialGradient(x, y, 0, x, y, coreR);
+    gC.addColorStop(0, `rgba(255,255,255,${sa * 0.95})`);
+    gC.addColorStop(0.12, `rgba(${bR},${bG},${bB},${sa * 0.7})`);
+    gC.addColorStop(0.35, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.2})`);
+    gC.addColorStop(0.7, `rgba(${col[0]},${col[1]},${col[2]},${sa * 0.04})`);
+    gC.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
+    ctx.fillStyle = gC;
+    ctx.beginPath(); ctx.arc(x, y, coreR, 0, Math.PI * 2); ctx.fill();
+
+    // Diffraction spikes on bright stars (mag < 2.5)
+    if (s.mag < 2.5) {
+      const spikeLen = curSz * (s.mag < 1.5 ? 5.0 : 3.0);
+      const spikeOp = sa * (s.mag < 1.5 ? 0.22 : 0.13);
+      ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${spikeOp})`;
+      ctx.lineWidth = 0.6;
+      for (let sp = 0; sp < 4; sp++) {
+        const ang = sp * Math.PI * 0.5 + Math.PI * 0.25;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(ang) * spikeLen, y + Math.sin(ang) * spikeLen);
+        ctx.stroke();
+      }
+    }
   }
+
+  ctx.restore();
 }
 
 /* ================================================================
-   DEEP SKY OBJECT RENDERERS
+   DSO NOISE-TEXTURE GENERATORS — pre-rendered at init like MW layers
    ================================================================ */
-function drawAndromeda(
-  ctx: CanvasRenderingContext2D,
-  cx: number, cy: number, size: number,
-  angle: number, opacity: number
-) {
-  if (opacity < 0.01) return;
-  ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
-  // Extended disk — large tilted ellipse
-  ctx.save(); ctx.scale(1, 0.35);
-  const disk = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-  disk.addColorStop(0, `rgba(255,240,200,${opacity * 0.45})`);
-  disk.addColorStop(0.06, `rgba(255,230,180,${opacity * 0.30})`);
-  disk.addColorStop(0.15, `rgba(220,210,185,${opacity * 0.15})`);
-  disk.addColorStop(0.3, `rgba(180,180,170,${opacity * 0.07})`);
-  disk.addColorStop(0.5, `rgba(150,160,185,${opacity * 0.03})`);
-  disk.addColorStop(0.75, `rgba(120,135,170,${opacity * 0.01})`);
-  disk.addColorStop(1, `rgba(90,100,140,0)`);
-  ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
-  ctx.fillStyle = disk; ctx.fill();
-  ctx.restore();
-  // Bright core
-  ctx.save(); ctx.scale(1, 0.5);
-  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.15);
-  core.addColorStop(0, `rgba(255,248,225,${opacity * 0.85})`);
-  core.addColorStop(0.3, `rgba(255,240,200,${opacity * 0.45})`);
-  core.addColorStop(0.7, `rgba(240,220,180,${opacity * 0.15})`);
-  core.addColorStop(1, `rgba(220,200,160,0)`);
-  ctx.beginPath(); ctx.arc(0, 0, size * 0.15, 0, Math.PI * 2);
-  ctx.fillStyle = core; ctx.fill();
-  ctx.restore();
-  // Dust lane — dark streak across center
-  ctx.save(); ctx.scale(1, 0.12); ctx.rotate(0.1);
-  ctx.fillStyle = `rgba(5,5,15,${opacity * 0.25})`;
-  ctx.beginPath(); ctx.ellipse(0, 0, size * 0.55, size * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  ctx.restore();
+function generateAndromedaTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 8);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+  const aspect = 0.28;
+  const rMax = baseSz * 1.05; // tighter cutoff — less bloom fodder
+
+  // Pre-generate OB associations along arms (blue star clusters)
+  const obAssocs: { nx: number; ny: number; sz: number; bright: number }[] = [];
+  for (let i = 0; i < 35; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.15 + Math.random() * 0.65;
+    obAssocs.push({
+      nx: Math.cos(ang) * rad, ny: Math.sin(ang) * rad * aspect,
+      sz: 0.008 + Math.random() * 0.015, bright: 0.1 + Math.random() * 0.2,
+    });
+  }
+  // Globular cluster positions in halo (yellowish dots)
+  const gcs: { nx: number; ny: number; sz: number }[] = [];
+  for (let i = 0; i < 15; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.3 + Math.random() * 0.6;
+    // Spheroidal distribution — less flattened than disk
+    gcs.push({ nx: Math.cos(ang) * rad, ny: Math.sin(ang) * rad * 0.6, sz: 0.006 + Math.random() * 0.004 });
+  }
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const gx = dx * cosA - dy * sinA;
+      const rawGy = dx * sinA + dy * cosA;
+      const gy = rawGy / aspect;
+      const dist = Math.sqrt(gx * gx + gy * gy);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      // Aggressive elliptical taper — kills dim outer fringe that blooms into haze
+      const edgeTaper = nd > 0.5 ? 0.5 + 0.5 * Math.cos(Math.PI * Math.min(1, (nd - 0.5) / 0.5)) : 1;
+
+      // S-warp (Andromeda's warped disk)
+      const warpAmp = 0.05 * Math.sin(nd * Math.PI * 3);
+      const gyW = gy + warpAmp * rMax * Math.sign(gx);
+      const theta = Math.atan2(gyW, gx);
+
+      // Exponential disk (steeper falloff)
+      const diskProfile = Math.exp(-nd * 4.0);
+
+      // 2 primary arms + 2 inter-arm spurs + faint 3rd arm
+      let armVal = 0;
+      let armId = 0; // which arm (for color variation)
+      for (let arm = 0; arm < 2; arm++) {
+        const armOff = arm * Math.PI;
+        const spiralAngle = theta - armOff - Math.log(nd + 0.03) * 2.8;
+        // Fine fbm warp on arm centerline
+        const armWarp = fbm(nd * 5 + 1000 + arm * 80, theta * 3 + 1000 + arm * 40, 4) * 0.35;
+        const armPhase = Math.sin((spiralAngle + armWarp) * 0.5);
+        const armDist = Math.abs(armPhase);
+        // Narrower arms for more contrast
+        const armStr = Math.exp(-armDist * armDist * 20) * (1 - nd * 0.4);
+        if (armStr > armVal) { armVal = armStr; armId = arm; }
+        // Inter-arm spur (branch off each arm)
+        const spurAngle = spiralAngle + 0.7 + fbm(nd * 3 + 1300 + arm * 60, theta + 1300, 3) * 0.4;
+        const spurDist = Math.abs(Math.sin(spurAngle * 0.5));
+        const spurStr = Math.exp(-spurDist * spurDist * 25) * armStr * 0.35;
+        armVal = Math.max(armVal, spurStr);
+      }
+      // Faint 3rd arm
+      {
+        const sa = theta - 2.1 - Math.log(nd + 0.06) * 2.3;
+        const ad = Math.abs(Math.sin(sa * 0.5));
+        armVal = Math.max(armVal, Math.exp(-ad * ad * 12) * 0.25 * (1 - nd * 0.6));
+      }
+
+      // 2-level domain warping (7 octaves for maximum detail)
+      const nsx = gx / rMax * 6, nsy = gy / rMax * 6;
+      const wq1 = fbm(nsx + 1000, nsy + 1000, 4);
+      const wq2 = fbm(nsx + 1052, nsy + 1031, 4);
+      const warpN1 = fbm(nsx + wq1 * 2.0, nsy + wq2 * 2.0, 5);
+      const wq3 = fbm(nsx + warpN1 * 1.0 + 1200, nsy + warpN1 * 1.0 + 1200, 4);
+      const warpN = fbm(nsx + wq3 * 0.6 + wq1 * 1.2, nsy + wq3 * 0.6 + wq2 * 1.2, 7);
+      const organicMod = 0.6 + (warpN + 1) * 0.4;
+
+      // Micro-texture: very fine noise for granular stellar population look
+      const microN = fbm(nsx * 4 + 1400, nsy * 4 + 1400, 3, 2.5, 0.45);
+      const microTex = 0.88 + microN * 0.12;
+
+      // de Vaucouleurs bulge (r^1/4 law), slightly elliptical
+      const bulgeDist = Math.sqrt(gx * gx + rawGy * rawGy * 2.5) / rMax;
+      const bulge = Math.exp(-Math.pow(bulgeDist + 0.001, 0.25) * 7) * 1.4;
+
+      // OB associations (blue star-forming clusters in arms)
+      let obGlow = 0;
+      const pnx = gx / rMax, pny = rawGy / rMax;
+      for (const k of obAssocs) {
+        const kd = Math.sqrt((pnx - k.nx) * (pnx - k.nx) + (pny - k.ny) * (pny - k.ny));
+        if (kd < k.sz * 3) obGlow += k.bright * Math.exp(-kd * kd / (k.sz * k.sz));
+      }
+      obGlow = Math.min(obGlow, 0.35);
+
+      // Globular cluster glow (golden dots in halo)
+      let gcGlow = 0;
+      for (const g of gcs) {
+        const gd = Math.sqrt((pnx - g.nx) * (pnx - g.nx) + (pny - g.ny) * (pny - g.ny));
+        if (gd < g.sz * 2.5) gcGlow += 0.2 * Math.exp(-gd * gd / (g.sz * g.sz));
+      }
+      gcGlow = Math.min(gcGlow, 0.25);
+
+      // Denser disk — brighter so bloom isn't needed for visibility
+      const rawI = (diskProfile * 0.5 + armVal * 0.6 + bulge + obGlow * armVal * 0.35 + gcGlow * 0.12) * organicMod * microTex;
+
+      // Concentric dust rings — subtle, fbm-modulated (not geometric bands)
+      const absGy = Math.abs(gyW / rMax);
+      const dustWarp = fbm(nsx * 3 + 1100, nsy * 0.5 + 1100, 5);
+      const dustWarp2 = fbm(nsx * 2 + 1160, nsy * 0.8 + 1160, 4);
+      let dustLane = 0;
+      // Smooth dust contribution — gaussian profile centered on major axis
+      // Outer dust (modulated by noise for clumpy/patchy appearance)
+      if (nd > 0.3 && nd < 0.85) {
+        const dustEnv = Math.exp(-absGy * absGy / (0.003 + dustWarp * 0.001));
+        dustLane += dustEnv * 0.35 * clamp((dustWarp + 0.2) * 0.8, 0, 1);
+      }
+      // Inner thin dust ring
+      if (nd > 0.06 && nd < 0.35) {
+        const dustEnv2 = Math.exp(-absGy * absGy / (0.001 + dustWarp2 * 0.0005));
+        dustLane += dustEnv2 * 0.3 * clamp((dustWarp2 + 0.3) * 0.7, 0, 1);
+      }
+      dustLane = Math.min(dustLane, 0.7);
+
+      const rawInt = Math.max(0, rawI * (1 - dustLane * 0.7)) * edgeTaper;
+      const finalInt = tonemap(rawInt * 2.5);
+
+      // Rich color model: golden bulge → blue arms → brownish inter-arm → pink OB associations
+      const warmth = Math.exp(-nd * 3.0);
+      const armMix = clamp(armVal * 2, 0, 1);
+      // Bulge: rich gold
+      const bR = 255, bG = 225, bB = 150;
+      // Arm: blue-white (star-forming)
+      const aR = 130, aG = 165, aB = 235;
+      // Inter-arm: muted brown
+      const iR = 175, iG = 150, iB = 105;
+      // Blend: bulge (center) → arm/inter-arm (disk)
+      const diskR = lerp(iR, aR, armMix);
+      const diskG = lerp(iG, aG, armMix);
+      const diskB = lerp(iB, aB, armMix);
+      let r = lerp(diskR, bR, warmth) * finalInt + obGlow * 90 * finalInt;
+      let g = lerp(diskG, bG, warmth) * finalInt + obGlow * 25 * finalInt;
+      let b = lerp(diskB, bB, warmth) * finalInt + obGlow * 50 * finalInt;
+      // Globular clusters add golden tint
+      r += gcGlow * 200 * finalInt;
+      g += gcGlow * 180 * finalInt;
+      b += gcGlow * 100 * finalInt;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      // Very aggressive alpha — only bright pixels survive, no dim haze
+      const pixAlpha = clamp(Math.pow(finalInt, 0.7) * 1.8, 0, 1) * edgeTaper * edgeTaper;
+      u32[py * dim + px] =
+        (clamp(pixAlpha * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
 }
 
-function drawPleiades(
+function generatePleiadesNebTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 2.2;
+  // Star positions for brightness lobes (normalized -1..1)
+  const lobes = [
+    { nx: 0, ny: 0, w: 1.0 },          // Alcyone
+    { nx: 0.28, ny: -0.18, w: 0.7 },    // Atlas
+    { nx: -0.32, ny: -0.10, w: 0.7 },   // Electra
+    { nx: -0.15, ny: 0.30, w: 0.65 },   // Maia
+    { nx: 0.22, ny: 0.25, w: 0.6 },     // Merope
+    { nx: -0.28, ny: 0.22, w: 0.5 },    // Taygeta
+    { nx: 0.35, ny: 0.05, w: 0.4 },     // Pleione
+  ];
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > rMax) continue;
+      // Multi-lobe brightness from star positions
+      let lobeBright = 0;
+      for (const l of lobes) {
+        const lx = l.nx * baseSz, ly = l.ny * baseSz;
+        const ldist = Math.sqrt((dx - lx) * (dx - lx) + (dy - ly) * (dy - ly));
+        const lrad = baseSz * (0.6 + l.w * 0.5);
+        lobeBright += l.w * Math.exp(-ldist * ldist / (lrad * lrad * 0.5));
+      }
+      // 2-level striated reflection filaments (Pleiades dust is streaky/fibrous)
+      const nsx = dx / rMax * 5, nsy = dy / rMax * 5;
+      const wq1 = fbm(nsx + 2000, nsy + 2000, 4);
+      const wq2 = fbm(nsx + 2052, nsy + 2031, 4);
+      const warpN1 = fbm(nsx + wq1 * 2.5, nsy + wq2 * 2.5, 5);
+      const wq3 = fbm(nsx + warpN1 * 1.0 + 2200, nsy + warpN1 * 1.0 + 2200, 4);
+      const warpN = fbm(nsx + wq3 * 0.7 + wq1 * 1.8, nsy + wq3 * 0.7 + wq2 * 1.8, 6);
+      const wispy = clamp((warpN + 0.8) * 0.55, 0, 1);
+      // Striation effect — elongated fibrous structures
+      const striatAngle = 0.4; // ~23° — roughly aligns with Merope IC 349 direction
+      const striatX = nsx * Math.cos(striatAngle) + nsy * Math.sin(striatAngle);
+      const striatN = fbm(striatX * 6 + 2100, nsy * 0.8 + 2100, 4, 2.5, 0.55);
+      const striation = 0.7 + Math.abs(striatN) * 0.6;
+      // Overall falloff
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const falloff = Math.exp(-nd * nd * 2.5);
+      const rawInt = lobeBright * wispy * striation * falloff * 0.5 * edgeTaper;
+      const intensity = tonemap(rawInt * 2.5);
+      // Blue-white reflection color with warm center near Merope
+      const centerWarm = lobeBright > 0.5 ? (lobeBright - 0.5) * 0.3 : 0;
+      const r = (85 + centerWarm * 60) * intensity;
+      const g = (130 + centerWarm * 30) * intensity;
+      const b = 245 * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+function generateOrionNebTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 7);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.8;
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nxf = dx / rMax, nyf = dy / rMax;
+
+      // Wing-shaped asymmetric falloff (M42 extends more to upper-left)
+      const wingAngle = Math.atan2(dy, dx);
+      const wingBias = 1 + 0.3 * Math.cos(wingAngle + 0.8); // stretch upper-left
+      const wingDist = nd * (1 / wingBias);
+
+      // 2-level domain-warped noise (6 octaves for rich billowing)
+      const nsx = dx / rMax * 2.2, nsy = dy / rMax * 2.2;
+      const wq1 = fbm(nsx + 3000, nsy + 3000, 4);
+      const wq2 = fbm(nsx + 3052, nsy + 3031, 4);
+      const cloudN1 = fbm(nsx + wq1 * 3.2, nsy + wq2 * 3.2, 5);
+      // 2nd level domain warp for complex billowing
+      const wq3 = fbm(nsx + cloudN1 * 1.5 + 3300, nsy + cloudN1 * 1.5 + 3300, 4);
+      const cloudN = fbm(nsx + wq3 * 1.2 + wq1 * 2.0, nsy + wq3 * 1.2 + wq2 * 2.0, 6);
+      const cloud = clamp((cloudN + 0.7) * 0.65, 0, 1);
+
+      // Fine-scale filamentary detail (higher freq layer)
+      const fineN = fbm(nsx * 3 + 3080, nsy * 3 + 3080, 4, 2.3, 0.5);
+      // Molecular cloud finger-like protrusions extending from main body
+      const fingerN = fbm(nsx * 1.8 + 3350, nsy * 4 + 3350, 5, 2.2, 0.45);
+      const fingers = clamp(fingerN - 0.1, 0, 0.5) * clamp(wingDist - 0.3, 0, 0.5) * 2;
+      const fineDetail = 0.85 + fineN * 0.15 + fingers * 0.12;
+
+      // Huygens bright region (central cavity, Trapezium)
+      const cavDx = dx - baseSz * 0.01, cavDy = dy + baseSz * 0.03;
+      const cavDist = Math.sqrt(cavDx * cavDx + cavDy * cavDy * 1.8);
+      const huygens = Math.exp(-cavDist * cavDist / (baseSz * baseSz * 0.05)) * 1.3;
+
+      // "Fish's Mouth" — dark bay with fbm-warped boundary
+      const fmWarp = fbm(nsx * 1.5 + 3150, nsy * 1.0 + 3150, 4) * 0.05;
+      const fmCx = 0.06 + fmWarp, fmCy = -0.02;
+      const fmShape = Math.abs(nyf - fmCy + fmWarp * 0.5) * 1.5 + Math.abs(nxf - fmCx) * 0.7;
+      const fishMouth = (nxf > -0.12 && nxf < 0.28 && nyf > -0.15 && nyf < 0.10)
+        ? clamp(1 - fmShape * 6, 0, 0.7) : 0;
+
+      // Multiple dark absorption bays (domain-warped)
+      const darkN1 = fbm(nsx * 1.2 + 3200, nsy * 1.2 + 3200, 5);
+      const darkBay1 = darkN1 > 0.18 ? clamp((darkN1 - 0.18) * 2.2, 0, 0.75) : 0;
+      // Second dark bay system at different scale
+      const darkN2 = fbm(nsx * 0.7 + 3280, nsy * 0.7 + 3280, 4);
+      const darkBay2 = darkN2 > 0.3 ? clamp((darkN2 - 0.3) * 2, 0, 0.4) : 0;
+      const totalDark = Math.min(Math.max(darkBay1, darkBay2, fishMouth), 0.85);
+
+      // Wing-shaped falloff
+      const falloff = Math.exp(-wingDist * wingDist * 1.6);
+
+      const rawInt = (cloud * fineDetail * 0.5 + huygens * 0.95) * falloff * (1 - totalDark) * edgeTaper;
+      const intensity = tonemap(rawInt * 2.5);
+
+      // 4-zone narrowband color: OIII teal (inner) → H-beta blue (inner-mid) → H-alpha pink (mid) → SII deep red (outer)
+      const cavNd = cavDist / (baseSz * 0.7);
+      const zone1 = clamp(1 - cavNd * 2.5, 0, 1); // inner OIII
+      const zone2 = clamp(1 - Math.abs(cavNd - 0.35) * 4, 0, 1); // H-beta transition
+      const zone3 = clamp(1 - Math.abs(cavNd - 0.6) * 3, 0, 1); // mid H-alpha
+      const zone4 = clamp(cavNd - 0.75, 0, 1); // outer SII
+      // OIII: cyan-teal
+      const oR = 40, oG = 210, oB = 160;
+      // H-beta: blue-green
+      const hbR = 55, hbG = 155, hbB = 210;
+      // H-alpha: rose-pink
+      const hR = 250, hG = 120, hB = 145;
+      // SII: deep red-brown (sulfur)
+      const sR = 200, sG = 50, sB = 40;
+      const zTot = zone1 + zone2 + zone3 + zone4 + 0.001;
+      const r = (oR * zone1 + hbR * zone2 + hR * zone3 + sR * zone4) / zTot * (zone1 + zone2 + zone3 + zone4) * intensity;
+      const g = (oG * zone1 + hbG * zone2 + hG * zone3 + sG * zone4) / zTot * (zone1 + zone2 + zone3 + zone4) * intensity;
+      const b = (oB * zone1 + hbB * zone2 + hB * zone3 + sB * zone4) / zTot * (zone1 + zone2 + zone3 + zone4) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/* ================================================================
+   DSO REAL-TIME STAR HELPERS — drawn on top of textures
+   ================================================================ */
+function drawPleiadesStars(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number, size: number,
   opacity: number, time: number
 ) {
-  if (opacity < 0.01) return;
-  // Blue reflection nebulosity — prominent haze
-  ctx.save(); ctx.globalCompositeOperation = "lighter";
-  const neb = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 2);
-  neb.addColorStop(0, `rgba(110,150,255,${opacity * 0.18})`);
-  neb.addColorStop(0.15, `rgba(90,130,250,${opacity * 0.10})`);
-  neb.addColorStop(0.35, `rgba(70,110,230,${opacity * 0.05})`);
-  neb.addColorStop(0.6, `rgba(50,80,200,${opacity * 0.015})`);
-  neb.addColorStop(1, `rgba(30,50,150,0)`);
-  ctx.beginPath(); ctx.arc(cx, cy, size * 2, 0, Math.PI * 2);
-  ctx.fillStyle = neb; ctx.fill();
-  ctx.restore();
-  // 7 sisters — bright blue stars in tight cluster
   const sisters = [
-    { dx: 0, dy: 0, mag: 2.87 },       // Alcyone
-    { dx: 0.28, dy: -0.18, mag: 3.63 }, // Atlas
-    { dx: -0.32, dy: -0.10, mag: 3.70 },// Electra
-    { dx: -0.15, dy: 0.30, mag: 3.87 }, // Maia
-    { dx: 0.22, dy: 0.25, mag: 4.18 },  // Merope
-    { dx: -0.28, dy: 0.22, mag: 4.30 }, // Taygeta
-    { dx: 0.35, dy: 0.05, mag: 5.09 },  // Pleione
+    { dx: 0, dy: 0, mag: 2.87 },
+    { dx: 0.28, dy: -0.18, mag: 3.63 },
+    { dx: -0.32, dy: -0.10, mag: 3.70 },
+    { dx: -0.15, dy: 0.30, mag: 3.87 },
+    { dx: 0.22, dy: 0.25, mag: 4.18 },
+    { dx: -0.28, dy: 0.22, mag: 4.30 },
+    { dx: 0.35, dy: 0.05, mag: 5.09 },
   ];
   for (const s of sisters) {
     const sx = cx + s.dx * size;
     const sy = cy + s.dy * size;
-    const sz = magToSize(s.mag) * 0.8;
-    const br = Math.min(1, magToBrightness(s.mag) * opacity * 2);
+    const sz = magToSize(s.mag) * 0.7;
+    const br = Math.min(1, magToBrightness(s.mag) * opacity * 1.5);
     const sc = 1 + 0.1 * Math.sin(time * 0.003 + s.dx * 50);
-    // Large star glow
-    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, sz * 7);
-    g.addColorStop(0, `rgba(170,200,255,${br * 0.4})`);
-    g.addColorStop(0.2, `rgba(150,185,255,${br * 0.15})`);
-    g.addColorStop(0.5, `rgba(120,160,255,${br * 0.04})`);
+    // Soft glow
+    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, sz * 5);
+    g.addColorStop(0, `rgba(170,200,255,${br * 0.3})`);
+    g.addColorStop(0.3, `rgba(140,175,255,${br * 0.08})`);
     g.addColorStop(1, `rgba(80,120,230,0)`);
-    ctx.beginPath(); ctx.arc(sx, sy, sz * 7, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(sx, sy, sz * 5, 0, Math.PI * 2);
     ctx.fillStyle = g; ctx.fill();
     // Core
     ctx.beginPath(); ctx.arc(sx, sy, sz * sc, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(210,225,255,${br})`;
-    ctx.fill();
-    // White center
-    ctx.beginPath(); ctx.arc(sx, sy, sz * 0.4, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255,255,255,${br * 0.7})`;
+    ctx.fillStyle = `rgba(200,220,255,${br})`;
     ctx.fill();
   }
 }
 
-function drawOrionNebula(
+function drawTrapeziumStars(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number, size: number,
-  opacity: number, _time: number
+  opacity: number
 ) {
-  if (opacity < 0.01) return;
-  ctx.save(); ctx.translate(cx, cy);
-  // Main emission (pink/magenta + green) — vivid
-  ctx.save(); ctx.globalCompositeOperation = "lighter";
-  ctx.save(); ctx.scale(1, 0.65);
-  const em = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-  em.addColorStop(0, `rgba(255,180,200,${opacity * 0.45})`);
-  em.addColorStop(0.1, `rgba(240,150,175,${opacity * 0.30})`);
-  em.addColorStop(0.25, `rgba(200,120,160,${opacity * 0.15})`);
-  em.addColorStop(0.45, `rgba(140,130,140,${opacity * 0.06})`);
-  em.addColorStop(0.7, `rgba(80,110,130,${opacity * 0.02})`);
-  em.addColorStop(1, `rgba(40,60,80,0)`);
-  ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2);
-  ctx.fillStyle = em; ctx.fill();
-  ctx.restore();
-  // Green OIII emission zone
-  const g2 = ctx.createRadialGradient(size * 0.08, -size * 0.05, 0, size * 0.08, -size * 0.05, size * 0.45);
-  g2.addColorStop(0, `rgba(80,220,140,${opacity * 0.22})`);
-  g2.addColorStop(0.3, `rgba(60,180,120,${opacity * 0.10})`);
-  g2.addColorStop(0.7, `rgba(40,140,100,${opacity * 0.03})`);
-  g2.addColorStop(1, `rgba(30,100,80,0)`);
-  ctx.beginPath(); ctx.arc(size * 0.08, -size * 0.05, size * 0.45, 0, Math.PI * 2);
-  ctx.fillStyle = g2; ctx.fill();
-  ctx.restore();
-  // Trapezium — 4 bright central stars
   const trap = [
     { dx: -0.03, dy: -0.02 }, { dx: 0.03, dy: -0.01 },
     { dx: 0.01, dy: 0.03 }, { dx: -0.02, dy: 0.02 },
   ];
   for (const t of trap) {
-    const tx = t.dx * size, ty = t.dy * size;
-    const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, 4);
-    tg.addColorStop(0, `rgba(255,255,255,${opacity * 0.8})`);
-    tg.addColorStop(0.5, `rgba(200,220,255,${opacity * 0.3})`);
+    const tx = cx + t.dx * size, ty = cy + t.dy * size;
+    const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, 3.5);
+    tg.addColorStop(0, `rgba(255,255,255,${opacity * 0.7})`);
+    tg.addColorStop(0.4, `rgba(200,220,255,${opacity * 0.2})`);
     tg.addColorStop(1, `rgba(150,180,255,0)`);
-    ctx.beginPath(); ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(tx, ty, 3.5, 0, Math.PI * 2);
     ctx.fillStyle = tg; ctx.fill();
   }
-  ctx.restore();
+}
+
+/* ================================================================
+   ADDITIONAL DSO NOISE-TEXTURE GENERATORS
+   ================================================================ */
+
+/** Crab Nebula (M1) — supernova remnant: tangled filaments, blue synchrotron + red filaments */
+function generateCrabNebTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.6;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+      const dist = Math.sqrt(rx * rx + ry * ry * 1.3);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.65 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.65) / 0.35) : 1;
+      const theta = Math.atan2(ry, rx);
+      const nsx = rx / rMax * 6, nsy = ry / rMax * 6;
+
+      // Tangled filaments — domain-warped to avoid pure radial pattern
+      const filWarp1 = fbm(nsx * 1.5 + 4000, nsy * 1.5 + 4000, 4, 2.0, 0.5);
+      const filWarp2 = fbm(nsx * 1.5 + 4050, nsy * 1.5 + 4050, 4, 2.0, 0.5);
+      const warpedTheta = theta + filWarp1 * 1.2;
+      const warpedNd = nd + filWarp2 * 0.08;
+      // Multiple tangled filament layers at different angular frequencies
+      const fil1 = Math.abs(Math.sin(warpedTheta * 6 + warpedNd * 8));
+      const fil2 = Math.abs(Math.sin(warpedTheta * 10 + filWarp1 * 5 + 1.5));
+      const fil3 = Math.abs(Math.sin(warpedTheta * 3.7 + filWarp2 * 6 + 3.2));
+      const filament = Math.max(fil1, fil2 * 0.7, fil3 * 0.5);
+      // Brightness variation along filaments
+      const filBrightVar = 0.5 + fbm(nsx * 3 + 4080, nsy * 3 + 4080, 3) * 0.5;
+      const filStr = filament * filBrightVar * Math.exp(-nd * 2.2);
+
+      // Synchrotron glow — non-uniform blue-white core with jet axis
+      const synchN = fbm(nsx * 0.8 + 4120, nsy * 0.8 + 4120, 3);
+      // Pulsar wind jet axis (elongated along ~150° PA)
+      const jetAngle = 2.6; // ~150° in radians
+      const jetDist = Math.abs(Math.sin(theta - jetAngle)) * nd;
+      const jet = Math.exp(-jetDist * jetDist * 40) * Math.exp(-nd * nd * 4) * 0.4;
+      const synchrotron = Math.exp(-nd * nd * 7) * (0.65 + synchN * 0.2) + jet;
+
+      // Irregular outer boundary — not a smooth ellipse
+      const boundaryN = fbm(theta * 1.5 + 4200, nd * 3 + 4200, 4, 2.0, 0.5);
+      const irregBound = nd > (0.75 + boundaryN * 0.15) ? 0 : 1;
+
+      const rawCrab = (filStr * 0.55 + synchrotron + fbm(nsx + 4100, nsy + 4100, 3) * 0.1 * Math.exp(-nd * 1.5))
+                        * edgeTaper * irregBound;
+      const intensity = tonemap(rawCrab * 2.2);
+
+      // Color: blue synchrotron core → red filaments at edges
+      const blueMix = Math.exp(-nd * 3);
+      const r = lerp(255, 140, blueMix) * intensity;
+      const g = lerp(100, 160, blueMix) * intensity;
+      const b = lerp(90, 255, blueMix) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Eagle Nebula (M16) — "Pillars of Creation": tapered columns against bright emission */
+function generateEagleNebTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 7);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.7;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  // 3 distinct pillar definitions: centerX, baseY, tipY, baseWidth, tipWidth, lean
+  const pillars = [
+    { cx: -0.13, baseY: 0.45, tipY: -0.28, baseW: 0.09, tipW: 0.025, lean: 0.03 },
+    { cx:  0.04, baseY: 0.45, tipY: -0.18, baseW: 0.07, tipW: 0.02,  lean: -0.02 },
+    { cx:  0.18, baseY: 0.45, tipY: -0.05, baseW: 0.055, tipW: 0.018, lean: 0.01 },
+  ];
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nsx = rx / rMax * 4, nsy = ry / rMax * 4;
+      const nx2 = rx / rMax, ny2 = ry / rMax;
+
+      // Bright emission backdrop — 2-level domain-warped H-alpha cloud
+      const wq1 = fbm(nsx + 4500, nsy + 4500, 4);
+      const wq2 = fbm(nsx + 4552, nsy + 4531, 4);
+      const emN1 = fbm(nsx + wq1 * 2.2, nsy + wq2 * 2.2, 5);
+      const wq3 = fbm(nsx + emN1 * 1.0 + 4600, nsy + emN1 * 1.0 + 4600, 3);
+      const emN = fbm(nsx + wq3 * 0.8 + wq1 * 1.5, nsy + wq3 * 0.8 + wq2 * 1.5, 6);
+      const emission = clamp((emN + 0.9) * 0.55, 0, 1) * Math.exp(-nd * nd * 1.6);
+
+      // Compute pillar darkness — each pillar is tapered (wide base → narrow tip)
+      let pillarDark = 0;
+      for (const p of pillars) {
+        // Check vertical range
+        if (ny2 < p.tipY - 0.05 || ny2 > p.baseY + 0.02) continue;
+        // Interpolate width from base to tip
+        const t = clamp((ny2 - p.tipY) / (p.baseY - p.tipY), 0, 1); // 0=tip, 1=base
+        const halfW = lerp(p.tipW, p.baseW, t);
+        // Center with lean
+        const center = p.cx + p.lean * (1 - t);
+        // Fbm warp on edges for organic erosion
+        const edgeWarp = fbm(nsx * 3 + 4700 + p.cx * 100, nsy * 2 + 4700, 4, 2.2, 0.55) * 0.035;
+        const warpedHalfW = halfW + edgeWarp;
+        // Wispy protrusions along edges
+        const whisp = fbm(nsx * 5 + 4750 + p.cx * 200, nsy * 4 + 4750, 3, 2.5, 0.5) * 0.02;
+        const effW = warpedHalfW + whisp;
+        const pdist = Math.abs(nx2 - center);
+        if (pdist >= effW) continue;
+
+        // Soft feathered edges
+        const edgeFrac = pdist / effW;
+        let pStr = 1 - edgeFrac * edgeFrac;
+        // Tip taper (fade at very top)
+        const tipFade = clamp((ny2 - p.tipY) / 0.06, 0, 1);
+        pStr *= tipFade;
+        // Internal luminosity: semi-transparent with subtle structure
+        const internalN = fbm(nsx * 2 + 4800 + p.cx * 300, nsy * 2 + 4800, 3);
+        const internalLum = 0.08 + internalN * 0.06;
+        // Final darkness: not pure black, has internal glow
+        pillarDark = Math.max(pillarDark, pStr * (0.82 - internalLum));
+      }
+
+      // Bright rim on pillar edges (photo-evaporation by UV from nearby O stars)
+      let rimGlow = 0;
+      if (pillarDark > 0.1 && pillarDark < 0.7) {
+        const rimStr = Math.sin(pillarDark / 0.7 * Math.PI);
+        rimGlow = rimStr * 0.4 * emission;
+      }
+      // EGG bright tips — bright photoevaporating knots at pillar tips
+      for (const p of pillars) {
+        const eggDx = nx2 - (p.cx + p.lean), eggDy = ny2 - p.tipY;
+        const eggDist = Math.sqrt(eggDx * eggDx + eggDy * eggDy);
+        if (eggDist < 0.04) {
+          rimGlow += (1 - eggDist / 0.04) * 0.5;
+        }
+      }
+
+      // Fine filamentary detail in emission background
+      const fineEm = fbm(nsx * 4 + 4850, nsy * 4 + 4850, 4, 2.3, 0.5);
+      const fineDetail = 0.85 + fineEm * 0.15;
+
+      const rawInt = emission * (1 - pillarDark) * fineDetail * edgeTaper;
+      const finalInt = tonemap(rawInt * 2.5);
+
+      // H-alpha orange-pink emission; bright white-blue rim on pillar edges
+      const pillarTint = pillarDark * 0.12;
+      const r = (235 * finalInt + 55 * pillarTint + 180 * rimGlow);
+      const g = (135 * finalInt + 22 * pillarTint + 200 * rimGlow);
+      const b = (95 * finalInt + 12 * pillarTint + 255 * rimGlow);
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      const alpha = clamp(finalInt * 255 + pillarTint * 60 + rimGlow * 200, 0, 255);
+      u32[py * dim + px] =
+        (clamp(alpha, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Ring Nebula (M57) — planetary nebula: torus shape with scattered cometary knots */
+function generateRingNebTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.5;
+
+  // Pre-generate scattered cometary knots — random positions along/near the ring
+  const knotCount = 18 + (Math.random() * 8) | 0;
+  const knots: { nx: number; ny: number; sz: number; bright: number }[] = [];
+  for (let i = 0; i < knotCount; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.48 + (Math.random() - 0.5) * 0.22; // scattered around ring radius
+    knots.push({
+      nx: Math.cos(ang) * rad,
+      ny: Math.sin(ang) * rad / 1.25, // account for ellipticity
+      sz: 0.02 + Math.random() * 0.025,
+      bright: 0.2 + Math.random() * 0.35,
+    });
+  }
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const ex = dx, ey = dy * 1.25;
+      const dist = Math.sqrt(ex * ex + ey * ey);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+
+      // Ring profile — dominant feature with sharper inner edge
+      const ringR = 0.55, ringWin = 0.12, ringWout = 0.22;
+      const ringDelta = nd - ringR;
+      const ringW = ringDelta < 0 ? ringWin : ringWout;
+      const ringProfile = Math.exp(-ringDelta * ringDelta / (ringW * ringW));
+
+      // 2-level domain-warped texture for ring surface detail
+      const nsx = dx / rMax * 5, nsy = dy / rMax * 5;
+      const wq1 = fbm(nsx + 5000, nsy + 5000, 4);
+      const wq2 = fbm(nsx + 5052, nsy + 5031, 4);
+      const texN1 = fbm(nsx + wq1 * 1.5, nsy + wq2 * 1.5, 4);
+      const wq3 = fbm(nsx + texN1 * 0.8 + 5100, nsy + texN1 * 0.8 + 5100, 3);
+      const texN = fbm(nsx + wq3 * 0.5 + wq1 * 1.0, nsy + wq3 * 0.5 + wq2 * 1.0, 5);
+      const texVar = 0.65 + (texN + 1) * 0.35;
+
+      // Scattered cometary knots — small irregular bright spots
+      let knotGlow = 0;
+      const pnx = dx / rMax, pny = dy / rMax;
+      for (const k of knots) {
+        const kdx = pnx - k.nx, kdy = pny - k.ny;
+        const kd = Math.sqrt(kdx * kdx + kdy * kdy);
+        if (kd < k.sz * 3) {
+          knotGlow += k.bright * Math.exp(-kd * kd / (k.sz * k.sz));
+        }
+      }
+      knotGlow = Math.min(knotGlow, 0.5);
+
+      // Central star glow
+      const centralGlow = Math.exp(-nd * nd * 30) * 0.35;
+      // Inner cavity (faint blue-green fill)
+      const cavityGlow = nd < ringR ? Math.exp(-nd * 5) * 0.18 : 0;
+
+      const rawRing = (ringProfile * texVar + knotGlow * ringProfile + centralGlow + cavityGlow) * edgeTaper;
+      const intensity = tonemap(rawRing * 2.2);
+
+      // Color: inner green/blue → outer red/pink
+      const colorT = clamp((nd - 0.3) / 0.5, 0, 1);
+      const r = lerp(60, 200, colorT) * intensity;
+      const g = lerp(190, 105, colorT) * intensity;
+      const b = lerp(175, 130, colorT) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Lagoon Nebula (M8) — large emission nebula with dark lanes and hourglass */
+function generateLagoonNebTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.8;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nsx = rx / rMax * 4, nsy = ry / rMax * 4;
+      // Main emission cloud — 2-level domain warp
+      const wq1 = fbm(nsx + 5500, nsy + 5500, 4);
+      const wq2 = fbm(nsx + 5552, nsy + 5531, 4);
+      const cloudN1 = fbm(nsx + wq1 * 2.5, nsy + wq2 * 2.5, 5);
+      const wq3 = fbm(nsx + cloudN1 * 1.0 + 5600, nsy + cloudN1 * 1.0 + 5600, 3);
+      const cloudN = fbm(nsx + wq3 * 0.6 + wq1 * 1.8, nsy + wq3 * 0.6 + wq2 * 1.8, 6);
+      const cloud = clamp((cloudN + 0.8) * 0.6, 0, 1);
+      // "Lagoon" — dark lane bisecting the nebula
+      const laneN = fbm(nsx * 0.8 + 5700, nsy * 2 + 5700, 3);
+      const laneY = ry / rMax;
+      const lane = (Math.abs(laneY - laneN * 0.15) < 0.06) ? 0.8 : 0;
+      // Hourglass bright center
+      const hourglassDist = Math.sqrt(rx * rx * 4 + ry * ry);
+      const hourglass = Math.exp(-hourglassDist * hourglassDist / (baseSz * baseSz * 0.15)) * 0.6;
+      const falloff = Math.exp(-nd * nd * 1.5);
+      // Fine-scale filamentary detail
+      const fineN = fbm(nsx * 3 + 5750, nsy * 3 + 5750, 4, 2.3, 0.5);
+      const fineDetail = 0.85 + fineN * 0.15;
+      const rawInt = (cloud * 0.6 + hourglass) * falloff * (1 - lane) * fineDetail * edgeTaper;
+      const intensity = tonemap(rawInt * 2.5);
+      // Pink-red emission with warm core
+      const warmth = Math.exp(-nd * 2);
+      const r = lerp(200, 255, warmth) * intensity;
+      const g = lerp(100, 170, warmth) * intensity;
+      const b = lerp(110, 140, warmth) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Whirlpool Galaxy (M51) — face-on grand-design spiral with companion NGC 5195 */
+function generateWhirlpoolTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 6);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.4;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+  const compX = baseSz * 0.85, compY = -baseSz * 0.35;
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+
+      let r = 0, g = 0, b = 0;
+
+      // Main galaxy
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist < rMax) {
+        const nd = dist / rMax;
+        const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+        const theta = Math.atan2(ry, rx);
+        // Tight 2-arm grand-design spiral with dust lane on inner edge
+        let armVal = 0;
+        let dustVal = 0;
+        for (let arm = 0; arm < 2; arm++) {
+          const armOff = arm * Math.PI;
+          const spiralAngle = theta - armOff - Math.log(nd + 0.03) * 3.2;
+          const armPhase = Math.sin(spiralAngle * 0.5);
+          const armDist = Math.abs(armPhase);
+          const armStr = Math.exp(-armDist * armDist * 14) * (1 - nd * 0.35);
+          armVal = Math.max(armVal, armStr);
+          // Dust lane on inner (leading) edge of arm — stronger contrast
+          if (armPhase > 0 && armPhase < 0.35 && nd > 0.06) {
+            dustVal = Math.max(dustVal, (1 - armPhase / 0.35) * 0.55 * armStr);
+          }
+        }
+        // 2-level domain warp for organic shape
+        const nsx = rx / rMax * 5, nsy = ry / rMax * 5;
+        const warpQ1 = fbm(nsx + 6000, nsy + 6000, 4);
+        const warpQ2 = fbm(nsx + 6052, nsy + 6031, 4);
+        const warpN1 = fbm(nsx + warpQ1 * 1.5, nsy + warpQ2 * 1.5, 5);
+        const warpN = fbm(nsx + warpN1 * 0.8 + 6100, nsy + warpN1 * 0.8 + 6100, 5);
+        const organicMod = 0.7 + (warpN + 1) * 0.3;
+        // Core bulge — CLAMPED to prevent blow-out
+        const bulge = Math.min(Math.exp(-nd * nd * 35) * 0.7, 0.7);
+        // Disk profile
+        const diskProfile = Math.exp(-nd * 3.2);
+        // HII regions along arms (pink emission clumps)
+        const hiiN = fbm(nsx * 4 + 6050, nsy * 4 + 6050, 3);
+        const hiiClump = (hiiN > 0.3 && armVal > 0.3) ? clamp((hiiN - 0.3) * 3, 0, 0.5) * armVal : 0;
+        // Fine-scale detail
+        const fineN = fbm(nsx * 3 + 6080, nsy * 3 + 6080, 4, 2.3, 0.5);
+        const fineDetail = 0.85 + fineN * 0.15;
+        // Boost arm contrast relative to disk
+        const rawInt = (diskProfile * 0.22 + armVal * 0.7 + bulge + hiiClump * 0.3) * organicMod * fineDetail * (1 - dustVal) * edgeTaper;
+        const intensity = tonemap(rawInt * 2.5);
+        // Blue arms, warm yellow core, pink HII
+        const warmth = Math.exp(-nd * 3.5);
+        r += lerp(110, 235, warmth) * intensity + hiiClump * 120 * intensity;
+        g += lerp(130, 220, warmth) * intensity + hiiClump * 35 * intensity;
+        b += lerp(210, 165, warmth) * intensity + hiiClump * 55 * intensity;
+      }
+
+      // Companion galaxy NGC 5195 (brighter, with structure)
+      const cdx = rx - compX, cdy = ry - compY;
+      const cDist = Math.sqrt(cdx * cdx + cdy * cdy * 1.6);
+      const cRad = baseSz * 0.25;
+      if (cDist < cRad) {
+        const cnd = cDist / cRad;
+        const compN = fbm(cdx / cRad * 3 + 6200, cdy / cRad * 3 + 6200, 3);
+        const cInt = Math.exp(-cnd * cnd * 3.5) * 0.75 * (0.8 + compN * 0.2);
+        r += 225 * cInt;
+        g += 205 * cInt;
+        b += 165 * cInt;
+      }
+
+      // Tidal bridge — wider and brighter
+      const bLen = Math.sqrt(compX * compX + compY * compY);
+      const bDist = Math.abs((ry - compY * 0.5) * compX - (rx - compX * 0.5) * compY) / bLen;
+      const bAlong = (rx * compX + ry * compY) / (bLen * bLen);
+      if (bDist < baseSz * 0.12 && bAlong > 0.2 && bAlong < 1.15) {
+        const bridgeN = fbm(rx / baseSz * 4 + 6150, ry / baseSz * 4 + 6150, 3);
+        const bFade = (1 - bDist / (baseSz * 0.12));
+        const bInt = bFade * 0.22 * (0.7 + bridgeN * 0.3);
+        r += 150 * bInt; g += 145 * bInt; b += 190 * bInt;
+      }
+
+      const totalInt = Math.sqrt(r * r + g * g + b * b) / 255;
+      if (totalInt < 0.01) continue;
+      u32[py * dim + px] =
+        (clamp(totalInt * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Horsehead Nebula (B33) — dark silhouette against red emission background */
+function generateHorseheadTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 7);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.7;
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      // Soft radial taper in outer 30%
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nsx = dx / rMax * 4, nsy = dy / rMax * 4;
+      const nx2 = dx / rMax, ny2 = dy / rMax;
+
+      // Bright red emission background (IC 434) — 2-level domain-warped cloud
+      const wq1 = fbm(nsx + 6500, nsy + 6500, 4);
+      const wq2 = fbm(nsx + 6552, nsy + 6531, 4);
+      const emN1 = fbm(nsx + wq1 * 2.0, nsy + wq2 * 2.0, 5);
+      const wq3 = fbm(nsx + emN1 * 1.0 + 6600, nsy + emN1 * 1.0 + 6600, 3);
+      const emN = fbm(nsx + wq3 * 0.6 + wq1 * 1.5, nsy + wq3 * 0.6 + wq2 * 1.5, 6);
+      // Directional illumination from sigma Orionis (upper-left)
+      const illumDir = clamp(0.7 - nx2 * 0.4 - ny2 * 0.5, 0.3, 1.2);
+      const emission = clamp((emN + 0.7) * 0.65, 0, 1) * Math.exp(-nd * nd * 1.5) * illumDir;
+
+      // Sculpted horse-head profile using signed distance field
+      // Neck: narrow column rising from bottom, slightly curved
+      const neckWarp = fbm(nsx * 1.5 + 6700, nsy * 0.8 + 6700, 4, 2.0, 0.5) * 0.06;
+      const neckCenterX = 0.02 + neckWarp + ny2 * 0.04; // slight leftward lean
+      const neckHalfW = 0.06 + clamp(ny2 + 0.1, 0, 0.4) * 0.04; // widens toward base
+      const neckDistX = Math.abs(nx2 - neckCenterX) / neckHalfW;
+      const inNeckY = ny2 > -0.18 && ny2 < 0.55;
+      const neckSDF = inNeckY ? neckDistX : 99;
+
+      // Head: wider organic blob at top of neck
+      const headWarp = fbm(nsx * 2 + 6750, nsy * 2 + 6750, 4, 2.0, 0.55) * 0.05;
+      const headCx = 0.06 + headWarp;
+      const headCy = -0.22;
+      const headRx = 0.14 + fbm(nsx * 1.2 + 6780, nsy * 1.2 + 6780, 3) * 0.03;
+      const headRy = 0.11 + headWarp * 0.5;
+      const hdx = (nx2 - headCx) / headRx, hdy = (ny2 - headCy) / headRy;
+      const headSDF = Math.sqrt(hdx * hdx + hdy * hdy);
+
+      // "Snout" protrusion (rightward bump on the head)
+      const snoutCx = 0.14 + headWarp;
+      const snoutCy = -0.20;
+      const snoutR = 0.07;
+      const snoutDist = Math.sqrt((nx2 - snoutCx) * (nx2 - snoutCx) + (ny2 - snoutCy) * (ny2 - snoutCy)) / snoutR;
+
+      // "Ear" bump at top
+      const earCx = 0.04 + headWarp * 0.5;
+      const earCy = -0.32;
+      const earR = 0.05;
+      const earDist = Math.sqrt((nx2 - earCx) * (nx2 - earCx) + (ny2 - earCy) * (ny2 - earCy)) / earR;
+
+      // Combine as smooth union of shapes
+      const shapeSDF = Math.min(neckSDF, headSDF, snoutDist, earDist);
+
+      // Dark base cloud (broad dark region at bottom)
+      const baseFbm = fbm(nsx * 0.8 + 6800, nsy * 0.5 + 6800, 3) * 0.08;
+      const baseY = ny2 - 0.20 - baseFbm;
+      const baseMask = baseY > 0 ? clamp(baseY * 4, 0, 0.75) : 0;
+
+      // Soft feathered edge: fbm-warped boundary with gradual alpha transition
+      const edgeWarp = fbm(nsx * 3 + 6850, nsy * 3 + 6850, 4, 2.2, 0.5) * 0.15;
+      const threshold = 1.0 + edgeWarp;
+      const featherWidth = 0.35;
+      let darkAlpha: number;
+      if (shapeSDF < threshold) {
+        darkAlpha = 0.88 - fbm(nsx * 2 + 6900, nsy * 2 + 6900, 3) * 0.12; // internal luminosity variation
+      } else if (shapeSDF < threshold + featherWidth) {
+        const t = (shapeSDF - threshold) / featherWidth;
+        darkAlpha = (0.88 - fbm(nsx * 2 + 6900, nsy * 2 + 6900, 3) * 0.12) * (1 - t * t);
+      } else {
+        darkAlpha = 0;
+      }
+      const totalDark = Math.max(darkAlpha, baseMask);
+
+      // Bright UV-illuminated rim on top/left edge of dark nebula (sigma Orionis illumination)
+      let rimGlow = 0;
+      if (totalDark > 0.15 && totalDark < 0.65) {
+        // Rim is brighter on top edge (ny2 < 0 = toward illuminating star)
+        const rimBias = clamp(0.3 - ny2, 0, 1);
+        rimGlow = Math.sin(totalDark / 0.65 * Math.PI) * 0.3 * rimBias * emission;
+      }
+
+      // Fine emission texture
+      const fineEm = fbm(nsx * 3 + 6920, nsy * 3 + 6920, 4, 2.3, 0.5);
+      const fineDetail = 0.85 + fineEm * 0.15;
+
+      const rawInt = emission * (1 - totalDark * 0.92) * fineDetail * edgeTaper;
+      const intensity = tonemap(rawInt * 2.5);
+
+      // Red emission + bright blue-white rim
+      const warmVar = 0.9 + fbm(nsx * 0.5 + 6950, nsy * 0.5 + 6950, 2) * 0.2;
+      const r = 220 * intensity * warmVar + 160 * rimGlow;
+      const g = 75 * intensity + 180 * rimGlow;
+      const b = 65 * intensity + 240 * rimGlow;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      const hhAlpha = clamp((intensity + rimGlow) * 255, 0, 255);
+      u32[py * dim + px] =
+        (clamp(hhAlpha, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Omega/Swan Nebula (M17) — bright emission with distinctive bar + swept wing */
+function generateOmegaNebTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.7;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nsx = rx / rMax * 4, nsy = ry / rMax * 4;
+      // Bright central bar (horizontal-ish bright stripe)
+      const barY = ry / rMax;
+      const barX = rx / rMax;
+      const barN = fbm(nsx * 1.5 + 7000, nsy * 0.5 + 7000, 3);
+      const barDist = Math.abs(barY + barN * 0.08);
+      const bar = Math.exp(-barDist * barDist * 80) * clamp(1 - Math.abs(barX) * 1.5, 0, 1);
+      // Swept wing — 2-level domain-warped emission cloud
+      const wq1 = fbm(nsx + 7100, nsy + 7100, 4);
+      const wq2 = fbm(nsx + 7152, nsy + 7131, 4);
+      const wingN1 = fbm(nsx + wq1 * 2.2, nsy + wq2 * 2.2, 5);
+      const wq3 = fbm(nsx + wingN1 * 0.8 + 7200, nsy + wingN1 * 0.8 + 7200, 3);
+      const wingN = fbm(nsx + wq3 * 0.5 + wq1 * 1.5, nsy + wq3 * 0.5 + wq2 * 1.5, 6);
+      const wing = clamp((wingN + 0.6) * 0.5, 0, 1) * Math.exp(-nd * nd * 2);
+      // Dark absorption on one side
+      const darkN = fbm(nsx * 1.2 + 7300, nsy * 1.2 + 7300, 3);
+      const darkSide = (barY > 0.05 + darkN * 0.05) ? clamp((barY - 0.05) * 4, 0, 0.7) : 0;
+      const rawOm = (bar * 0.8 + wing * 0.4) * (1 - darkSide) * edgeTaper;
+      const intensity = tonemap(rawOm * 2.5);
+      // Pink-red emission with brighter core
+      const coreWarm = Math.exp(-nd * 3);
+      const r = lerp(200, 255, coreWarm) * intensity;
+      const g = lerp(110, 180, coreWarm) * intensity;
+      const b = lerp(100, 130, coreWarm) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Triangulum Galaxy (M33) — face-on flocculent spiral, blue arms, HII knots (NGC 604) */
+function generateTriangulumTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.3;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  // Pre-generate HII region clumps along spiral arms (scattered pink knots)
+  const hiiKnots: { nx: number; ny: number; sz: number; bright: number }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.25 + Math.random() * 0.5;
+    hiiKnots.push({
+      nx: Math.cos(ang) * rad,
+      ny: Math.sin(ang) * rad * 0.77, // inclination
+      sz: 0.02 + Math.random() * 0.025,
+      bright: 0.25 + Math.random() * 0.35,
+    });
+  }
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = (dx * sinA + dy * cosA) * 1.3;
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const theta = Math.atan2(ry, rx);
+      const nsx = rx / rMax * 5, nsy = ry / rMax * 5;
+
+      // Flocculent spiral arms (2 loose arms with higher fbm amplitude for visibility)
+      let armVal = 0;
+      for (let arm = 0; arm < 2; arm++) {
+        const armOff = arm * Math.PI;
+        const spiralAngle = theta - armOff - Math.log(nd + 0.06) * 2.0;
+        // Fbm warp on arm centerline for flocculent irregularity
+        const armWarp = fbm(nsx * 1.5 + 7500 + arm * 100, nsy * 1.5 + 7500, 3) * 0.8;
+        const armDist = Math.abs(Math.sin((spiralAngle + armWarp) * 0.5));
+        const armStr = Math.exp(-armDist * armDist * 10) * (1 - nd * 0.5);
+        armVal = Math.max(armVal, armStr);
+      }
+
+      // 2-level domain-warped noise for clumpy star-forming texture
+      const wq1 = fbm(nsx + 7550, nsy + 7550, 4);
+      const wq2 = fbm(nsx + 7602, nsy + 7581, 4);
+      const clumps1 = fbm(nsx + wq1 * 2.0, nsy + wq2 * 2.0, 5);
+      const wq3 = fbm(nsx + clumps1 * 0.8 + 7650, nsy + clumps1 * 0.8 + 7650, 3);
+      const clumps = fbm(nsx + wq3 * 0.5 + wq1 * 1.5, nsy + wq3 * 0.5 + wq2 * 1.5, 6);
+      const clumpBright = clamp((clumps + 0.4) * 0.7, 0, 1);
+
+      // Small weak bulge (M33 characteristic)
+      const bulge = Math.exp(-nd * nd * 25) * 0.5;
+      // Exponential disk — dimmer inter-arm
+      const disk = Math.exp(-nd * 2.8) * 0.2;
+
+      // HII region knots (pink emission clumps along arms)
+      let hiiGlow = 0;
+      const pnx = rx / rMax, pny = ry / rMax;
+      for (const k of hiiKnots) {
+        const kdx = pnx - k.nx, kdy = pny - k.ny;
+        const kd = Math.sqrt(kdx * kdx + kdy * kdy);
+        if (kd < k.sz * 4) {
+          hiiGlow += k.bright * Math.exp(-kd * kd / (k.sz * k.sz));
+        }
+      }
+      hiiGlow = Math.min(hiiGlow, 0.6);
+
+      // Arm + inter-arm contrast: arms bright, inter-arm dim
+      const armContrib = armVal * clumpBright * 0.65;
+      const rawTri = (disk + armContrib + bulge + hiiGlow * armVal * 0.4) * edgeTaper;
+      const intensity = tonemap(rawTri * 2.5);
+
+      // Color: blue arms (star-forming) vs yellow/brown inter-arm disk
+      const armMix = clamp(armVal * 1.5, 0, 1);
+      const warmth = Math.exp(-nd * 2.5);
+      // Inter-arm: warm brownish. Arms: blue-white
+      const baseR = lerp(lerp(140, 220, warmth), lerp(100, 180, warmth), armMix);
+      const baseG = lerp(lerp(120, 200, warmth), lerp(140, 210, warmth), armMix);
+      const baseB = lerp(lerp(80, 170, warmth), lerp(200, 240, warmth), armMix);
+      // HII pink tint
+      const r = (baseR + hiiGlow * 100) * intensity;
+      const g = (baseG + hiiGlow * 30) * intensity;
+      const b = (baseB + hiiGlow * 50) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Helix Nebula (NGC 7293) — "Eye of God": large face-on planetary, double-ring perspective, scattered knots */
+function generateHelixNebTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.7;
+
+  // Pre-generate scattered cometary knots — radially oriented, irregularly spaced
+  const knotCount = 30 + (Math.random() * 15) | 0;
+  const hKnots: { nx: number; ny: number; sz: number; bright: number; tailAngle: number }[] = [];
+  for (let i = 0; i < knotCount; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.35 + (Math.random() - 0.3) * 0.35;
+    hKnots.push({
+      nx: Math.cos(ang) * rad,
+      ny: Math.sin(ang) * rad / 1.15,
+      sz: 0.015 + Math.random() * 0.02,
+      bright: 0.15 + Math.random() * 0.25,
+      tailAngle: ang, // radially outward
+    });
+  }
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const ex = dx, ey = dy * 1.15;
+      const dist = Math.sqrt(ex * ex + ey * ey);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+
+      // Double-ring perspective: outer ring with sharper inner boundary
+      const outerR = 0.55, outerWin = 0.10, outerWout = 0.19;
+      const outerDelta = nd - outerR;
+      const outerW = outerDelta < 0 ? outerWin : outerWout;
+      const outerRing = Math.exp(-outerDelta * outerDelta / (outerW * outerW));
+      // Inner ring (tilted = offset center for perspective)
+      const innerDx = dx + baseSz * 0.035, innerDy = dy * 1.2 - baseSz * 0.025;
+      const innerDist = Math.sqrt(innerDx * innerDx + innerDy * innerDy) / rMax;
+      const innerR = 0.28, innerW = 0.08;
+      const innerRing = Math.exp(-(innerDist - innerR) * (innerDist - innerR) / (innerW * innerW)) * 0.6;
+
+      // Scattered cometary knots with radial tails
+      let knotGlow = 0;
+      const pnx = dx / rMax, pny = dy / rMax;
+      for (const k of hKnots) {
+        const kdx = pnx - k.nx, kdy = pny - k.ny;
+        const kd = Math.sqrt(kdx * kdx + kdy * kdy);
+        if (kd < k.sz * 4) {
+          // Head glow
+          knotGlow += k.bright * Math.exp(-kd * kd / (k.sz * k.sz)) * 0.7;
+          // Faint radial tail
+          const toDist = kdx * Math.cos(k.tailAngle) + kdy * Math.sin(k.tailAngle);
+          if (toDist > 0 && toDist < k.sz * 3) {
+            const perpDist = Math.abs(-kdx * Math.sin(k.tailAngle) + kdy * Math.cos(k.tailAngle));
+            if (perpDist < k.sz * 0.5) {
+              knotGlow += k.bright * 0.3 * Math.exp(-toDist / (k.sz * 2));
+            }
+          }
+        }
+      }
+      knotGlow = Math.min(knotGlow, 0.45);
+
+      // Domain-warped ring texture
+      const nsx = dx / rMax * 6, nsy = dy / rMax * 6;
+      const wq1 = fbm(nsx + 8100, nsy + 8100, 3);
+      const wq2 = fbm(nsx + 8152, nsy + 8131, 3);
+      const texN = fbm(nsx + wq1 * 1.5, nsy + wq2 * 1.5, 4);
+      const texVar = 0.65 + (texN + 1) * 0.35;
+
+      // Central star + hot inner cavity
+      const centralGlow = Math.exp(-nd * nd * 35) * 0.45;
+      const cavity = nd < 0.18 ? (1 - nd / 0.18) * 0.15 : 0;
+
+      const rawIntH = ((outerRing + innerRing) * texVar + knotGlow + centralGlow + cavity) * edgeTaper;
+      const intensity = tonemap(rawIntH * 2.2);
+
+      // Color: outer red/orange → inner cyan/blue → white center
+      const colorT = clamp(nd / 0.6, 0, 1);
+      const r = lerp(75, 230, colorT) * intensity;
+      const g = lerp(200, 130, colorT) * intensity;
+      const b = lerp(195, 75, colorT) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Sombrero Galaxy (M104) — edge-on with prominent dust lane, bright bulge */
+function generateSombreroTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.3;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+  const aspect = 0.22; // very edge-on
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const gx = dx * cosA - dy * sinA;
+      const gy = (dx * sinA + dy * cosA) / aspect;
+      const dist = Math.sqrt(gx * gx + gy * gy);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      // Disk profile
+      const disk = Math.exp(-nd * 3);
+      // Large bright spherical bulge (Sombrero's hallmark)
+      const bulgeY = (dx * sinA + dy * cosA); // un-squeezed y
+      const bulgeDist = Math.sqrt(gx * gx * 0.6 + bulgeY * bulgeY * 4);
+      const bulge = Math.exp(-bulgeDist * bulgeDist / (baseSz * baseSz * 0.04)) * 1.5;
+      // Noise texture
+      const nsx = gx / rMax * 5, nsy = gy / rMax * 5;
+      const texN = fbm(nsx + 8500, nsy + 8500, 3);
+      const texVar = 0.7 + (texN + 1) * 0.3;
+      // Prominent dust lane — dark band across equator
+      const laneY = Math.abs(dx * sinA + dy * cosA);
+      const laneN = fbm(gx / rMax * 8 + 8600, 0, 3);
+      const laneWidth = baseSz * (0.012 + Math.abs(laneN) * 0.008);
+      const inDisk = nd < 0.85;
+      const dustLane = (laneY < laneWidth && inDisk) ?
+        (1 - laneY / laneWidth) * 0.85 : 0;
+      // Extended globular cluster halo (Sombrero has >2000 GCs)
+      const haloY = (dx * sinA + dy * cosA);
+      const haloDist = Math.sqrt(gx * gx * 0.7 + haloY * haloY) / rMax;
+      const gcHalo = Math.exp(-haloDist * haloDist * 1.8) * 0.1;
+      const rawSomb = (disk * 0.5 + bulge + gcHalo) * texVar * (1 - dustLane) * edgeTaper;
+      const intensity = tonemap(rawSomb * 2.2);
+      // Warm yellow-white with subtle color gradient
+      const warmth = clamp(bulge / 1.5, 0, 1);
+      const r = lerp(185, 255, warmth) * intensity;
+      const g = lerp(170, 245, warmth) * intensity;
+      const b = lerp(145, 210, warmth) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Butterfly/Bug Nebula (NGC 6302) — bipolar lobes with narrow waist, asymmetric */
+function generateButterflyNebTex(baseSz: number, angle: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.7;
+  const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const rx = dx * cosA - dy * sinA;
+      const ry = dx * sinA + dy * cosA;
+      const dist = Math.sqrt(rx * rx + ry * ry);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const nsx = rx / rMax * 5, nsy = ry / rMax * 5;
+
+      // Asymmetric bipolar lobes: lobe A (right) bigger, lobe B (left) more compact
+      const lobeBoundA = fbm(nsx * 2 + 9000, nsy * 2 + 9000, 4, 2.2, 0.5) * 0.04;
+      const lobeBoundB = fbm(nsx * 2 + 9050, nsy * 2 + 9050, 4, 2.2, 0.5) * 0.04;
+      const lobeA = Math.exp(-(
+        (rx / rMax - 0.32) * (rx / rMax - 0.32) * 10 +
+        ry * ry / (rMax * rMax) * (5 + lobeBoundA * 20)
+      ));
+      const lobeB = Math.exp(-(
+        (rx / rMax + 0.28) * (rx / rMax + 0.28) * 14 +
+        ry * ry / (rMax * rMax) * (7 + lobeBoundB * 20)
+      )) * 0.85;
+
+      // Sharper equatorial dust torus
+      const waistNorm = Math.abs(rx / rMax);
+      const waistWarp = fbm(nsy * 3 + 9100, 0, 3) * 0.015;
+      const waistWidth = 0.06 + waistWarp;
+      const waist = waistNorm < waistWidth
+        ? (1 - waistNorm / waistWidth) * (1 - waistNorm / waistWidth) * 0.9
+        : 0;
+
+      // 2-level domain-warped filamentary lobe boundaries
+      const wq1 = fbm(nsx + 9150, nsy + 9150, 4);
+      const wq2 = fbm(nsx + 9202, nsy + 9181, 4);
+      const filN1 = fbm(nsx + wq1 * 2.2, nsy + wq2 * 2.2, 5);
+      const wq3 = fbm(nsx + filN1 * 0.8 + 9250, nsy + filN1 * 0.8 + 9250, 3);
+      const filN = fbm(nsx + wq3 * 0.6 + wq1 * 1.5, nsy + wq3 * 0.6 + wq2 * 1.5, 6);
+      const filament = clamp((filN + 0.4) * 0.75, 0, 1);
+
+      // Central star
+      const central = Math.exp(-nd * nd * 50) * 0.35;
+      const rawBut = ((lobeA + lobeB) * filament * 0.7 + central) * (1 - waist) * edgeTaper;
+      const intensity = tonemap(rawBut * 2.2);
+
+      // Purple-magenta lobes with teal at edges
+      const edgeFrac = nd;
+      const r = lerp(210, 115, edgeFrac) * intensity;
+      const g = lerp(75, 175, edgeFrac) * intensity;
+      const b = lerp(225, 200, edgeFrac) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
+}
+
+/** Rosette Nebula (NGC 2237) — circular emission shell, irregular petals, Bok globules */
+function generateRosetteNebTex(baseSz: number): HTMLCanvasElement {
+  const dim = Math.ceil(baseSz * 5);
+  const nc = document.createElement("canvas");
+  nc.width = dim; nc.height = dim;
+  const nctx = nc.getContext("2d", { willReadFrequently: true })!;
+  const imgData = nctx.createImageData(dim, dim);
+  const buf = new ArrayBuffer(imgData.data.length);
+  const u8 = new Uint8ClampedArray(buf);
+  const u32 = new Uint32Array(buf);
+  const hd = dim / 2;
+  const rMax = baseSz * 1.8;
+
+  // Pre-generate Bok globules — small dark blobs scattered in the shell
+  const bokGlobules: { nx: number; ny: number; sz: number }[] = [];
+  for (let i = 0; i < 8; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 0.2 + Math.random() * 0.35;
+    bokGlobules.push({
+      nx: Math.cos(ang) * rad,
+      ny: Math.sin(ang) * rad,
+      sz: 0.025 + Math.random() * 0.02,
+    });
+  }
+
+  for (let py = 0; py < dim; py++) {
+    for (let px = 0; px < dim; px++) {
+      const dx = px - hd, dy = py - hd;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > rMax) continue;
+      const nd = dist / rMax;
+      const edgeTaper = nd > 0.7 ? 0.5 + 0.5 * Math.cos(Math.PI * (nd - 0.7) / 0.3) : 1;
+      const theta = Math.atan2(dy, dx);
+      const nsx = dx / rMax * 4, nsy = dy / rMax * 4;
+
+      // Shell profile with sharper inner edge (cleared cavity)
+      const shellR = 0.48, shellW = 0.25;
+      const shellDist = nd - shellR;
+      // Asymmetric: sharp inner edge, gradual outer falloff
+      const shell = shellDist < 0
+        ? Math.exp(-shellDist * shellDist / (0.08 * 0.08)) // sharp inner
+        : Math.exp(-shellDist * shellDist / (shellW * shellW));
+
+      // Irregular petals — domain-warped angular modulation (not regular sin)
+      const petalWarp = fbm(theta * 2 + 9500, nd * 3 + 9500, 4, 2.0, 0.5) * 1.5;
+      const petals = 0.45 + 0.55 * clamp(Math.sin(theta * 4.3 + petalWarp) * 0.5 + 0.5, 0, 1);
+
+      // 2-level domain-warped filamentary cloud detail
+      const wq1 = fbm(nsx + 9600, nsy + 9600, 4);
+      const wq2 = fbm(nsx + 9652, nsy + 9631, 4);
+      const cloudN1 = fbm(nsx + wq1 * 2.5, nsy + wq2 * 2.5, 5);
+      const wq3 = fbm(nsx + cloudN1 * 1.0 + 9700, nsy + cloudN1 * 1.0 + 9700, 3);
+      const cloudN = fbm(nsx + wq3 * 0.6 + wq1 * 1.8, nsy + wq3 * 0.6 + wq2 * 1.8, 6);
+      const cloud = clamp((cloudN + 0.5) * 0.65, 0, 1);
+
+      // Bok globules — explicit dark blobs
+      let bokDark = 0;
+      const pnx = dx / rMax, pny = dy / rMax;
+      for (const bg of bokGlobules) {
+        const bd = Math.sqrt((pnx - bg.nx) * (pnx - bg.nx) + (pny - bg.ny) * (pny - bg.ny));
+        if (bd < bg.sz * 2.5) {
+          bokDark = Math.max(bokDark, Math.exp(-bd * bd / (bg.sz * bg.sz)) * 0.7);
+        }
+      }
+      // Additional noise-based dark patches
+      const bokN = fbm(nsx * 3 + 9800, nsy * 3 + 9800, 3);
+      if (bokN > 0.4) bokDark = Math.max(bokDark, clamp((bokN - 0.4) * 3, 0, 0.6));
+
+      // Central cavity glow (faint scattered light)
+      const cavityGlow = nd < 0.22 ? Math.exp(-nd * 10) * 0.12 : 0;
+
+      const rawRos = (shell * petals * cloud * 0.7 + cavityGlow) * (1 - bokDark) * edgeTaper;
+      const intensity = tonemap(rawRos * 2.5);
+
+      // Pink-red H-alpha emission, bluer at edges
+      const edgeMix = clamp((nd - 0.3) / 0.4, 0, 1);
+      const r = lerp(250, 155, edgeMix) * intensity;
+      const g = lerp(115, 95, edgeMix) * intensity;
+      const b = lerp(125, 175, edgeMix) * intensity;
+
+      if (r < 1 && g < 1 && b < 1) continue;
+      u32[py * dim + px] =
+        (clamp(intensity * 255, 0, 255) << 24) |
+        (clamp(b, 0, 255) << 16) |
+        (clamp(g, 0, 255) << 8) |
+        clamp(r, 0, 255);
+    }
+  }
+  imgData.data.set(u8);
+  nctx.putImageData(imgData, 0, 0);
+  return nc;
 }
 
 /* ================================================================
@@ -830,6 +2736,8 @@ export function StarField() {
     let mwLayers: HTMLCanvasElement[] = [];
     let mwWisps: MWWisp[] = [];
     let zoneNebulae: HTMLCanvasElement[] = [];
+    let dsoTextures: HTMLCanvasElement[] = [];
+    let constSprites: ConstLineSprite[] = [];
     let scrollY = 0;
     let maxScroll = 1;
     let smoothScroll = 0;
@@ -848,7 +2756,12 @@ export function StarField() {
     let fpsFrames = 0;
     let prevCamX = 0, prevCamY = 0;
     let camVelX = 0, camVelY = 0;
+    let scrollVelMag = 0; // camera velocity magnitude for scroll-gate
     let nextShootTime = 0;
+    let satellites: Satellite[] = [];
+    let nextSatTime = 0;
+    let comets: Comet[] = [];
+    let nextCometTime = 0;
     let dustGrid: Float32Array | null = null;
     const DUST_GRID_SIZE = 64;
 
@@ -964,12 +2877,13 @@ export function StarField() {
       }
     };
 
-    /* ---- Domain-warped zone nebulae (pre-computed per zone) ---- */
+    /* ---- Zone nebulae: each zone has unique visual structure (pre-computed) ---- */
     const generateZoneNebulae = () => {
-      // Oversized: padding avoids tiling seams
-      const nebPadW = Math.ceil(NEB_PAD / 5), nebPadH = Math.ceil(NEB_PAD / 5);
-      const nw = Math.ceil(lw / 5) + nebPadW * 2, nh = Math.ceil(lh / 5) + nebPadH * 2;
-      zoneNebulae = ZONES.map((zone) => {
+      const nebDiv = 3; // resolution divisor (lower = sharper textures, higher init cost)
+      const nebPadW = Math.ceil(NEB_PAD / nebDiv), nebPadH = Math.ceil(NEB_PAD / nebDiv);
+      const nw = Math.ceil(lw / nebDiv) + nebPadW * 2, nh = Math.ceil(lh / nebDiv) + nebPadH * 2;
+      const generators = [genNebZone0, genNebZone1, genNebZone2, genNebZone3, genNebZone4];
+      zoneNebulae = ZONES.map((zone, idx) => {
         const nc = document.createElement("canvas");
         nc.width = nw; nc.height = nh;
         const nctx = nc.getContext("2d", { willReadFrequently: true })!;
@@ -977,47 +2891,126 @@ export function StarField() {
         const buf = new ArrayBuffer(imgData.data.length);
         const u8 = new Uint8ClampedArray(buf);
         const u32 = new Uint32Array(buf);
-        const nb = zone.neb;
 
-        for (let py = 0; py < nh; py++) {
-          for (let px = 0; px < nw; px++) {
-            const nx = px / nw, ny = py / nh;
+        // Dispatch to zone-specific generator
+        generators[idx](u32, nw, nh, zone.neb);
 
-            // Domain-warped noise
-            const { val, q1, q2 } = warpedNoise(
-              px, py, nb.scale, nb.warpK, nb.noiseOff
-            );
-
-            // Density with threshold and falloff
-            const density = Math.pow(
-              Math.max(0, val * 0.5 + 0.5 + nb.density),
-              nb.falloff
-            );
-
-            // Vignette removed — texture tiles via drawWrapped, vignette created visible seams
-
-            // Color mixing using warp vectors
-            const colorMix = clamp((q1 + 1) * 0.5, 0, 1);
-            const int = density * nb.peak;
-            const r = lerp(nb.c1[0], nb.c2[0], colorMix) * int / 255;
-            const g = lerp(nb.c1[1], nb.c2[1], colorMix) * int / 255;
-            const b = lerp(nb.c1[2], nb.c2[2], colorMix) * int / 255;
-
-            // Secondary color variation from q2 (adds richness)
-            const r2 = r + q2 * int * 0.08;
-            const g2 = g + q2 * int * 0.05;
-            const b2 = b - q2 * int * 0.03;
-
-            u32[py * nw + px] =
-              (255 << 24) |
-              (clamp(b2, 0, 255) << 16) |
-              (clamp(g2, 0, 255) << 8) |
-              clamp(r2, 0, 255);
-          }
-        }
         imgData.data.set(u8);
         nctx.putImageData(imgData, 0, 0);
+
+        // Per-zone post-processing (directional / radial blur, init-time only)
+        {
+          const tmp0 = document.createElement("canvas");
+          tmp0.width = nw; tmp0.height = nh;
+          tmp0.getContext("2d")!.drawImage(nc, 0, 0);
+          if (idx === 0) {
+            // Zone 0: directional smear along sweep angle → elongated fibers
+            const smAng = 0.44;
+            const sdx = Math.cos(smAng) * 2, sdy = Math.sin(smAng) * 2;
+            for (let i = 1; i <= 4; i++) {
+              nctx.globalAlpha = 0.12 / Math.sqrt(i);
+              nctx.drawImage(tmp0, sdx * i, sdy * i);
+              nctx.drawImage(tmp0, -sdx * i, -sdy * i);
+            }
+          } else if (idx === 1) {
+            // Zone 1: vertical smear (angle ~1.5 rad) — aurora curtain drape
+            const smAng1 = 1.5;
+            const s1dx = Math.cos(smAng1) * 2.5, s1dy = Math.sin(smAng1) * 2.5;
+            for (let i = 1; i <= 3; i++) {
+              nctx.globalAlpha = 0.10 / Math.sqrt(i);
+              nctx.drawImage(tmp0, s1dx * i, s1dy * i);
+              nctx.drawImage(tmp0, -s1dx * i, -s1dy * i);
+            }
+          } else if (idx === 2) {
+            // Zone 2: radial blur from off-center point via scale transform
+            const rcx = nw * 0.35, rcy = nh * 0.4;
+            for (let i = 1; i <= 4; i++) {
+              const sc = 1 + i * 0.008;
+              nctx.save();
+              nctx.globalAlpha = 0.08 / Math.sqrt(i);
+              nctx.translate(rcx, rcy);
+              nctx.scale(sc, sc);
+              nctx.translate(-rcx, -rcy);
+              nctx.drawImage(tmp0, 0, 0);
+              nctx.restore();
+            }
+          } else if (idx === 3) {
+            // Zone 3: diagonal smear along rot=1.2 rad — filament flow
+            const smAng3 = 1.2;
+            const s3dx = Math.cos(smAng3) * 2, s3dy = Math.sin(smAng3) * 2;
+            for (let i = 1; i <= 4; i++) {
+              nctx.globalAlpha = 0.10 / Math.sqrt(i);
+              nctx.drawImage(tmp0, s3dx * i, s3dy * i);
+              nctx.drawImage(tmp0, -s3dx * i, -s3dy * i);
+            }
+          } else if (idx === 4) {
+            // Zone 4: isotropic 8-direction soft blur — ethereal void cells
+            const dirs4 = [0, Math.PI / 4, Math.PI / 2, Math.PI * 3 / 4];
+            for (let pass = 0; pass < 2; pass++) {
+              for (const ang of dirs4) {
+                const d4x = Math.cos(ang) * 1.5, d4y = Math.sin(ang) * 1.5;
+                nctx.globalAlpha = 0.06;
+                nctx.drawImage(tmp0, d4x, d4y);
+                nctx.drawImage(tmp0, -d4x, -d4y);
+              }
+            }
+          }
+          nctx.globalAlpha = 1;
+        }
+
         return nc;
+      });
+    };
+
+    /* ---- DSO textures (noise-based, pre-rendered at init) ---- */
+    const generateDSOTextures = () => {
+      const md = Math.min(lw, lh);
+      // Per-type settings: [blur radius, bloom strength, embedded star count, star brightness, grain intensity]
+      const dsoPostSettings: Record<DsoType, [number, number, number, number, number]> = {
+        andromeda:       [3, 0.06, 10, 0.06, 0.02],
+        pleiades:        [16, 0.48, 20, 0.35, 0.03],
+        orion_nebula:    [14, 0.42, 35, 0.20, 0.04],
+        crab_nebula:     [10, 0.32, 15, 0.18, 0.04],
+        eagle_nebula:    [12, 0.38, 30, 0.20, 0.04],
+        ring_nebula:     [10, 0.38, 10, 0.15, 0.035],
+        lagoon_nebula:   [12, 0.38, 25, 0.20, 0.04],
+        whirlpool:       [12, 0.30, 40, 0.22, 0.035],
+        horsehead:       [12, 0.32, 20, 0.18, 0.04],
+        omega_nebula:    [12, 0.38, 20, 0.18, 0.04],
+        triangulum:      [10, 0.28, 35, 0.22, 0.035],
+        helix_nebula:    [12, 0.40, 18, 0.18, 0.04],
+        sombrero:        [10, 0.28, 30, 0.20, 0.035],
+        butterfly_nebula:[12, 0.38, 12, 0.15, 0.04],
+        rosette_nebula:  [14, 0.40, 25, 0.18, 0.04],
+      };
+      dsoTextures = DEEP_SKY.map((d) => {
+        const sz = d.size * md;
+        let raw: HTMLCanvasElement;
+        switch (d.type) {
+          case 'andromeda': raw = generateAndromedaTex(sz, d.angle); break;
+          case 'pleiades': raw = generatePleiadesNebTex(sz); break;
+          case 'orion_nebula': raw = generateOrionNebTex(sz); break;
+          case 'crab_nebula': raw = generateCrabNebTex(sz, d.angle); break;
+          case 'eagle_nebula': raw = generateEagleNebTex(sz, d.angle); break;
+          case 'ring_nebula': raw = generateRingNebTex(sz); break;
+          case 'lagoon_nebula': raw = generateLagoonNebTex(sz, d.angle); break;
+          case 'whirlpool': raw = generateWhirlpoolTex(sz, d.angle); break;
+          case 'horsehead': raw = generateHorseheadTex(sz); break;
+          case 'omega_nebula': raw = generateOmegaNebTex(sz, d.angle); break;
+          case 'triangulum': raw = generateTriangulumTex(sz, d.angle); break;
+          case 'helix_nebula': raw = generateHelixNebTex(sz); break;
+          case 'sombrero': raw = generateSombreroTex(sz, d.angle); break;
+          case 'butterfly_nebula': raw = generateButterflyNebTex(sz, d.angle); break;
+          case 'rosette_nebula': raw = generateRosetteNebTex(sz); break;
+        }
+        const [glowR, glowS, starCount, starBr, grainInt] = dsoPostSettings[d.type];
+        // Add embedded field stars before bloom (so they also get bloomed)
+        addEmbeddedStars(raw, starCount, starBr);
+        // Dual-radius chromatic bloom
+        const bloomed = applyDSOGlow(raw, glowR, glowS);
+        // Astrophoto grain (after bloom, on final)
+        addAstroGrain(bloomed, grainInt);
+        return bloomed;
       });
     };
 
@@ -1157,6 +3150,10 @@ export function StarField() {
         { x: w * 0.3, y: h * 0.28, r: Math.min(w, h) * 0.13 },
         { x: w * 0.7, y: h * 0.5, r: Math.min(w, h) * 0.11 },
         { x: w * 0.5, y: h * 0.15, r: Math.min(w, h) * 0.09 },
+        // Dense star patches visible during zone 3-4 scrolling
+        { x: w * 0.85, y: h * 0.35, r: Math.min(w, h) * 0.10 },
+        { x: w * 0.15, y: h * 0.70, r: Math.min(w, h) * 0.11 },
+        { x: w * 0.60, y: h * 0.80, r: Math.min(w, h) * 0.09 },
       ];
       starsByLayer = Array.from({ length: 7 }, () => []); galaxies = []; shootingStars = [];
       let seed = 0;
@@ -1368,21 +3365,23 @@ export function StarField() {
               sctx.restore();
             }
 
-            // --- Chromatic aberration halo (R/B channel offset) ---
+            // --- Chromatic aberration halo (star-color-aware R/B channel offset) ---
             const caOff = Math.max(1.2, sz * 0.15); // offset px
             const caRad = sz * 3;
-            // Red shifted right
+            // Red halo shifted right (tinted by star color)
+            const caRr = Math.min(255, ri * 1.6) | 0, caRg = (gi * 0.3) | 0, caRb = (bi * 0.15) | 0;
             const rGrd = sctx.createRadialGradient(cx + caOff, cy, 0, cx + caOff, cy, caRad);
-            rGrd.addColorStop(0, `rgba(255,${gi * 0.3 | 0},${bi * 0.2 | 0},0.04)`);
-            rGrd.addColorStop(0.4, `rgba(255,${gi * 0.3 | 0},${bi * 0.2 | 0},0.01)`);
-            rGrd.addColorStop(1, `rgba(255,0,0,0)`);
+            rGrd.addColorStop(0, `rgba(${caRr},${caRg},${caRb},0.04)`);
+            rGrd.addColorStop(0.4, `rgba(${caRr},${caRg},${caRb},0.01)`);
+            rGrd.addColorStop(1, `rgba(${caRr},0,0,0)`);
             sctx.beginPath(); sctx.arc(cx + caOff, cy, caRad, 0, Math.PI * 2);
             sctx.fillStyle = rGrd; sctx.fill();
-            // Blue shifted left
+            // Blue halo shifted left (tinted by star color)
+            const caBr = (ri * 0.15) | 0, caBg = (gi * 0.3) | 0, caBb = Math.min(255, bi * 1.6) | 0;
             const bGrd = sctx.createRadialGradient(cx - caOff, cy, 0, cx - caOff, cy, caRad);
-            bGrd.addColorStop(0, `rgba(${ri * 0.2 | 0},${gi * 0.3 | 0},255,0.04)`);
-            bGrd.addColorStop(0.4, `rgba(${ri * 0.2 | 0},${gi * 0.3 | 0},255,0.01)`);
-            bGrd.addColorStop(1, `rgba(0,0,255,0)`);
+            bGrd.addColorStop(0, `rgba(${caBr},${caBg},${caBb},0.04)`);
+            bGrd.addColorStop(0.4, `rgba(${caBr},${caBg},${caBb},0.01)`);
+            bGrd.addColorStop(1, `rgba(0,0,${caBb},0)`);
             sctx.beginPath(); sctx.arc(cx - caOff, cy, caRad, 0, Math.PI * 2);
             sctx.fillStyle = bGrd; sctx.fill();
 
@@ -1536,6 +3535,93 @@ export function StarField() {
           }
         }
       }
+    };
+
+    /* ---- Pre-render constellation line sprites (shadowBlur only at init, free at runtime) ---- */
+    const generateConstellationSprites = () => {
+      const md = Math.min(lw, lh);
+      constSprites = CONSTELLATIONS.map(c => {
+        // Bounding box of star positions in pixels
+        let minPx = Infinity, maxPx = -Infinity;
+        let minPy = Infinity, maxPy = -Infinity;
+        for (const s of c.stars) {
+          const px = s.dx * md, py = s.dy * md;
+          if (px < minPx) minPx = px;
+          if (px > maxPx) maxPx = px;
+          if (py < minPy) minPy = py;
+          if (py > maxPy) maxPy = py;
+        }
+        // Padding: half max lineWidth(5) + shadowBlur(14) + overshoot(2.5) ≈ 22 → 25
+        const pad = 25;
+        const w = Math.ceil(maxPx - minPx) + pad * 2;
+        const h = Math.ceil(maxPy - minPy) + pad * 2;
+        const ox = -minPx + pad; // local origin offset
+        const oy = -minPy + pad;
+
+        const sc = document.createElement("canvas");
+        sc.width = w; sc.height = h;
+        const sctx = sc.getContext("2d")!;
+        sctx.globalCompositeOperation = "lighter";
+        sctx.lineCap = "round";
+
+        for (const [a, b] of c.edges) {
+          const sa = c.stars[a], sb = c.stars[b];
+          const pax = sa.dx * md + ox, pay = sa.dy * md + oy;
+          const pbx = sb.dx * md + ox, pby = sb.dy * md + oy;
+          const cA = sa.color || [200, 210, 240];
+          const cB = sb.color || [200, 210, 240];
+          const mR = (cA[0] + cB[0]) >> 1, mG = (cA[1] + cB[1]) >> 1, mB = (cA[2] + cB[2]) >> 1;
+
+          // Overshoot 2.5px past each star
+          const ddx = pbx - pax, ddy = pby - pay;
+          const len = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (len < 1) continue;
+          const inv = 1 / len;
+          const x0 = pax - ddx * inv * 2.5, y0 = pay - ddy * inv * 2.5;
+          const x1 = pbx + ddx * inv * 2.5, y1 = pby + ddy * inv * 2.5;
+
+          // Pass 1-2: wide glow WITH shadowBlur (expensive, but only at init)
+          sctx.shadowColor = `rgba(${mR},${mG},${mB},0.5)`;
+          sctx.shadowBlur = 14;
+          sctx.strokeStyle = `rgba(${mR},${mG},${mB},0.008)`;
+          sctx.lineWidth = 10;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+          sctx.strokeStyle = `rgba(${mR},${mG},${mB},0.015)`;
+          sctx.lineWidth = 7;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+
+          // Pass 3: medium glow with reduced shadow
+          sctx.shadowBlur = 8;
+          sctx.strokeStyle = `rgba(${mR},${mG},${mB},0.03)`;
+          sctx.lineWidth = 4.5;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+
+          // Pass 4: spectral gradient with subtle shadow
+          sctx.shadowBlur = 4;
+          const g1 = sctx.createLinearGradient(x0, y0, x1, y1);
+          g1.addColorStop(0, `rgba(${cA[0]},${cA[1]},${cA[2]},0.08)`);
+          g1.addColorStop(0.5, `rgba(${mR},${mG},${mB},0.065)`);
+          g1.addColorStop(1, `rgba(${cB[0]},${cB[1]},${cB[2]},0.08)`);
+          sctx.strokeStyle = g1;
+          sctx.lineWidth = 2.5;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+
+          // Pass 5-6: core spectral lines (no shadow needed)
+          sctx.shadowBlur = 0;
+          const g2 = sctx.createLinearGradient(x0, y0, x1, y1);
+          g2.addColorStop(0, `rgba(${cA[0]},${cA[1]},${cA[2]},0.18)`);
+          g2.addColorStop(0.5, `rgba(${mR},${mG},${mB},0.15)`);
+          g2.addColorStop(1, `rgba(${cB[0]},${cB[1]},${cB[2]},0.18)`);
+          sctx.strokeStyle = g2;
+          sctx.lineWidth = 1.0;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+
+          sctx.strokeStyle = `rgba(${mR},${mG},${mB},0.30)`;
+          sctx.lineWidth = 0.5;
+          sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); sctx.stroke();
+        }
+        return { canvas: sc, ox, oy };
+      });
     };
 
     /* ---- Scintillation (OPT: sin/cos replaces Perlin noise — 100x cheaper) ---- */
@@ -1815,6 +3901,132 @@ export function StarField() {
       }
     };
 
+    /* ---- Satellite / ISS streak ---- */
+    const maybeSpawnSatellite = (time: number) => {
+      if (time < nextSatTime || satellites.length >= 1) return;
+      nextSatTime = time + 30000 + Math.random() * 30000;
+      const fromLeft = Math.random() > 0.5;
+      const speed = 1.2 + Math.random() * 0.8; // px/frame
+      const yStart = Math.random() * lh * 0.6;
+      const angle = (fromLeft ? 0.05 : Math.PI - 0.05) + (Math.random() - 0.5) * 0.3;
+      satellites.push({
+        x: fromLeft ? -20 : lw + 20,
+        y: yStart,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed * 0.3,
+        life: 1,
+        maxLife: (lw / speed) * 1.2, // enough frames to cross screen
+        brightness: 0.4 + Math.random() * 0.3,
+        flareTime: 0.3 + Math.random() * 0.4, // flare at 30-70% of travel
+      });
+    };
+
+    const updateAndDrawSatellites = () => {
+      for (let i = satellites.length - 1; i >= 0; i--) {
+        const s = satellites[i];
+        s.x += s.vx; s.y += s.vy;
+        s.life -= 1 / s.maxLife;
+        if (s.life <= 0 || s.x < -50 || s.x > lw + 50 || s.y < -50 || s.y > lh + 50) {
+          satellites.splice(i, 1); continue;
+        }
+        const lifeFrac = 1 - s.life;
+        // Iridium-style flare: 3x brightness burst over ~5% of travel
+        const flareDist = Math.abs(lifeFrac - s.flareTime);
+        const flareBoost = flareDist < 0.025 ? 1 + 2 * (1 - flareDist / 0.025) : 1;
+        const br = s.brightness * flareBoost;
+        // Fade in/out at edges
+        const edgeFade = Math.min(lifeFrac * 10, (1 - lifeFrac) * 10, 1);
+        const alpha = br * edgeFade;
+        // Draw dot
+        ctx.beginPath(); ctx.arc(s.x, s.y, flareBoost > 1.5 ? 2.0 : 1.2, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,240,${clamp(alpha, 0, 1)})`;
+        ctx.fill();
+        // Short trail
+        const trailLen = 8;
+        const vMag = Math.hypot(s.vx, s.vy) || 1;
+        const tx = s.x - (s.vx / vMag) * trailLen;
+        const ty = s.y - (s.vy / vMag) * trailLen;
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,255,240,${clamp(alpha * 0.3, 0, 1)})`;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    /* ---- Comet ---- */
+    const maybeSpawnComet = (time: number) => {
+      if (time < nextCometTime || comets.length >= 1) return;
+      nextCometTime = time + 45000 + Math.random() * 45000;
+      const angle = Math.PI * 0.6 + Math.random() * 0.5; // mostly downward-right
+      const speed = 0.3 + Math.random() * 0.5;
+      comets.push({
+        x: Math.random() * lw * 0.3,
+        y: -30,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        maxLife: 600 + Math.random() * 600, // 30-60s at 30fps
+        dustAngle: 0.35 + Math.random() * 0.3, // curve offset for dust tail
+        tailLen: 200 + Math.random() * 200,
+      });
+    };
+
+    const updateAndDrawComets = () => {
+      for (let i = comets.length - 1; i >= 0; i--) {
+        const c = comets[i];
+        c.x += c.vx; c.y += c.vy;
+        c.life -= 1 / c.maxLife;
+        if (c.life <= 0 || c.x > lw + 100 || c.y > lh + 100 || c.x < -200 || c.y < -200) {
+          comets.splice(i, 1); continue;
+        }
+        const lifeCurve = Math.sin(c.life * Math.PI); // fade in/out
+        const vMag = Math.hypot(c.vx, c.vy) || 1;
+        const ndx = -c.vx / vMag, ndy = -c.vy / vMag; // tail direction (opposite velocity)
+
+        // Ion tail — straight blue-white gradient
+        const ionLen = c.tailLen * lifeCurve;
+        const ionEndX = c.x + ndx * ionLen;
+        const ionEndY = c.y + ndy * ionLen;
+        const ionGrad = ctx.createLinearGradient(c.x, c.y, ionEndX, ionEndY);
+        ionGrad.addColorStop(0, `rgba(180,210,255,${lifeCurve * 0.25})`);
+        ionGrad.addColorStop(0.1, `rgba(140,180,255,${lifeCurve * 0.15})`);
+        ionGrad.addColorStop(0.4, `rgba(100,140,230,${lifeCurve * 0.06})`);
+        ionGrad.addColorStop(1, `rgba(80,100,200,0)`);
+        ctx.save();
+        ctx.strokeStyle = ionGrad;
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(ionEndX, ionEndY); ctx.stroke();
+        ctx.restore();
+
+        // Dust tail — curved warm gradient via quadraticCurveTo
+        const dustLen = ionLen * 0.5;
+        const dustEndX = c.x + ndx * dustLen;
+        const dustEndY = c.y + ndy * dustLen;
+        // Control point offset perpendicular to tail direction
+        const perpX = -ndy, perpY = ndx;
+        const cpx = c.x + ndx * dustLen * 0.5 + perpX * dustLen * Math.sin(c.dustAngle);
+        const cpy = c.y + ndy * dustLen * 0.5 + perpY * dustLen * Math.sin(c.dustAngle);
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,220,150,${lifeCurve * 0.12})`;
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.quadraticCurveTo(cpx, cpy, dustEndX, dustEndY); ctx.stroke();
+        ctx.restore();
+
+        // Coma head — green-white radial gradient
+        const comaR = 6;
+        const comaGrad = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, comaR);
+        comaGrad.addColorStop(0, `rgba(220,255,220,${lifeCurve * 0.7})`);
+        comaGrad.addColorStop(0.3, `rgba(150,230,150,${lifeCurve * 0.3})`);
+        comaGrad.addColorStop(0.7, `rgba(100,200,120,${lifeCurve * 0.08})`);
+        comaGrad.addColorStop(1, `rgba(80,160,100,0)`);
+        ctx.beginPath(); ctx.arc(c.x, c.y, comaR, 0, Math.PI * 2);
+        ctx.fillStyle = comaGrad; ctx.fill();
+      }
+    };
+
     /* ---- Zone system ---- */
     const getWeights = (): number[] => {
       const sn = maxScroll > 1 ? smoothScroll / maxScroll : 0;
@@ -1858,28 +4070,14 @@ export function StarField() {
       }
     };
 
-    /* ---- Constellations + Deep Sky Objects ---- */
-    const drawConstellationsAndDSO = (wts: number[], time: number) => {
-      const md = Math.min(lw, lh);
-      // Constellations
-      for (const c of CONSTELLATIONS) {
+    /* ---- Constellations ---- */
+    const drawConstellations = (wts: number[], time: number) => {
+      for (let ci = 0; ci < CONSTELLATIONS.length; ci++) {
+        const c = CONSTELLATIONS[ci];
         let op = 0;
         for (let i = 0; i < wts.length && i < c.zoneWeights.length; i++)
           op = Math.max(op, wts[i] * c.zoneWeights[i]);
-        if (op > 0.01) drawConstellation(ctx, c, op * 1.0, lw, lh, time, smoothCameraX, smoothCameraY);
-      }
-      // Deep sky objects
-      for (const d of DEEP_SKY) {
-        let op = 0;
-        for (let i = 0; i < wts.length && i < d.zoneWeights.length; i++)
-          op = Math.max(op, wts[i] * d.zoneWeights[i]);
-        if (op < 0.01) continue;
-        const dx = d.vpX * lw + smoothCameraX * -0.03;
-        const dy = d.vpY * lh + smoothCameraY * -0.03;
-        const sz = d.size * md;
-        if (d.type === 'andromeda') drawAndromeda(ctx, dx, dy, sz, d.angle, op * 1.0);
-        else if (d.type === 'pleiades') drawPleiades(ctx, dx, dy, sz, op * 1.0, time);
-        else if (d.type === 'orion_nebula') drawOrionNebula(ctx, dx, dy, sz, op * 1.0, time);
+        if (op > 0.01) drawConstellation(ctx, c, op * 1.0, lw, lh, time, smoothCameraX, smoothCameraY, constSprites[ci]);
       }
     };
 
@@ -1893,7 +4091,7 @@ export function StarField() {
         ctx.globalCompositeOperation = "lighter";
         const zh = lh * 0.55;
         const zg = ctx.createLinearGradient(lw * 0.5, lh, lw * 0.5, lh - zh);
-        zg.addColorStop(0, `rgba(255,230,180,${zodOp * 0.08})`);
+        zg.addColorStop(0, `rgba(255,230,180,${zodOp * 0.088})`);
         zg.addColorStop(0.15, `rgba(240,210,150,${zodOp * 0.05})`);
         zg.addColorStop(0.4, `rgba(200,180,130,${zodOp * 0.02})`);
         zg.addColorStop(1, `rgba(160,140,100,0)`);
@@ -1910,14 +4108,29 @@ export function StarField() {
       if (agOp > 0.01) {
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
-        const agH = lh * 0.08;
+        const agH = lh * 0.12;
         const ag = ctx.createLinearGradient(0, lh, 0, lh - agH);
         ag.addColorStop(0, `rgba(80,180,120,${agOp * 0.06})`);
         ag.addColorStop(0.3, `rgba(60,150,100,${agOp * 0.04})`);
-        ag.addColorStop(0.7, `rgba(40,120,80,${agOp * 0.015})`);
+        ag.addColorStop(0.7, `rgba(40,120,80,${agOp * 0.016})`);
         ag.addColorStop(1, `rgba(20,80,60,0)`);
         ctx.fillStyle = ag;
         ctx.fillRect(0, lh - agH, lw, agH);
+        ctx.restore();
+      }
+      // Horizon glow — warm purple-orange band at bottom 25%
+      const hzOp = Math.max(wts[0] * 0.9, wts[1] * 0.7, wts[2] * 0.3, wts[3] * 0.15, wts[4] * 0.05);
+      if (hzOp > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const hzH = lh * 0.25;
+        const hg = ctx.createLinearGradient(0, lh, 0, lh - hzH);
+        hg.addColorStop(0, `rgba(180,100,60,${hzOp * 0.04})`);
+        hg.addColorStop(0.3, `rgba(140,70,120,${hzOp * 0.025})`);
+        hg.addColorStop(0.65, `rgba(80,40,100,${hzOp * 0.012})`);
+        hg.addColorStop(1, `rgba(40,20,60,0)`);
+        ctx.fillStyle = hg;
+        ctx.fillRect(0, lh - hzH, lw, hzH);
         ctx.restore();
       }
     };
@@ -1998,6 +4211,31 @@ export function StarField() {
             ctx.globalAlpha = modA;
             ctx.drawImage(s.sprite, ix - s.spriteHalf!, iy - s.spriteHalf!);
             ctx.restore();
+            // Animated lens flare: oscillating horizontal streak + ghost circles
+            if (time !== undefined && modA > 0.05) {
+              const flareOsc = 0.5 + 0.5 * Math.sin(time * 0.0005 + s.nSeed * 7);
+              const flareA = modA * 0.03 * flareOsc;
+              if (flareA > 0.002) {
+                const fLen = s.size * 14;
+                ctx.save();
+                ctx.globalCompositeOperation = "lighter";
+                ctx.globalAlpha = flareA;
+                ctx.strokeStyle = `rgba(${(s.baseColor[0] * 0.8 + 50) | 0},${(s.baseColor[1] * 0.8 + 50) | 0},${(s.baseColor[2] * 0.8 + 50) | 0},1)`;
+                ctx.lineWidth = Math.max(0.5, s.size * 0.1);
+                ctx.beginPath(); ctx.moveTo(ix - fLen, iy); ctx.lineTo(ix + fLen, iy); ctx.stroke();
+                // Ghost circles at time-varying offsets
+                const ghostOsc = Math.sin(time * 0.0003 + s.nSeed * 3.1);
+                const ghostDx = s.size * (4 + ghostOsc * 2);
+                ctx.globalAlpha = flareA * 0.5;
+                ctx.beginPath(); ctx.arc(ix + ghostDx, iy, s.size * 1.0, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(${s.baseColor[0]},${s.baseColor[1]},${s.baseColor[2]},0.5)`;
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+                ctx.beginPath(); ctx.arc(ix - ghostDx * 1.4, iy, s.size * 0.7, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+              }
+            }
             // Chromatic scintillation: tinted core overlay
             if (chrom) {
               const cr = clamp(s.baseColor[0] * tint[0] * chrom.rMul, 0, 255) | 0;
@@ -2189,10 +4427,88 @@ export function StarField() {
           // Reduced motion or first frame: just draw layer 0
           ctx.drawImage(mwLayers[0], -nebOffX - MW_PAD, -off - MW_PAD, mwDW, mwDH);
         }
+
       }
 
+      // --- DSO depth-layer drawing helper ---
+      // 3 layers with distinct drift speed / parallax for depth separation
+      // depth 0 (galaxies): slowest, drawn here after MW
+      // depth 1 (large nebulae): moderate, drawn after deep field
+      // depth 2 (compact objects): fastest, drawn after zone nebulae
+      const DSO_DEPTH_PARAMS: Array<{
+        driftF: [number, number, number, number];
+        driftA: [number, number, number, number];
+        mousePx: number; camPx: number;
+      }> = [
+        { driftF: [0.012, 0.008, 0.010, 0.006], driftA: [18, 10, 14, 8], mousePx: 3.0, camPx: 0.04 },
+        { driftF: [0.022, 0.014, 0.018, 0.011], driftA: [32, 18, 24, 14], mousePx: 5.0, camPx: 0.05 },
+        { driftF: [0.035, 0.022, 0.028, 0.017], driftA: [50, 28, 38, 22], mousePx: 8.0, camPx: 0.065 },
+      ];
+      const drawDSOLayer = (depthLevel: 0 | 1 | 2) => {
+        if (dsoTextures.length === 0) return;
+        const p = DSO_DEPTH_PARAMS[depthLevel];
+        const md = Math.min(lw, lh);
+        const layerDx = !reduced && time !== undefined
+          ? Math.sin(driftTime * p.driftF[0]) * p.driftA[0] + Math.sin(driftTime * p.driftF[1]) * p.driftA[1] : 0;
+        const layerDy = !reduced && time !== undefined
+          ? Math.cos(driftTime * p.driftF[2]) * p.driftA[2] + Math.cos(driftTime * p.driftF[3]) * p.driftA[3] : 0;
+        const mOff = p.mousePx;
+        const cOff = p.camPx;
+        const baseOffX = smoothMouseX * mOff - smoothCameraX * cOff;
+        const baseOffY = smoothMouseY * mOff - smoothCameraY * cOff;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (let di = 0; di < DEEP_SKY.length; di++) {
+          const d = DEEP_SKY[di];
+          if (d.depth !== depthLevel) continue;
+          const tex = dsoTextures[di];
+          if (!tex) continue;
+          const px = d.vpX * lw - baseOffX - layerDx;
+          const py = d.vpY * lh - baseOffY - layerDy;
+          const sz = d.size * md;
+          const baseAlpha = d.type === 'andromeda' || d.type === 'orion_nebula' ? 0.65
+            : d.type === 'pleiades' ? 0.55
+            : d.type === 'whirlpool' || d.type === 'triangulum' || d.type === 'sombrero' ? 0.5
+            : 0.6;
+          // Real-time shimmer: multi-frequency sin() per-DSO for subtle breathing
+          const t = time ?? 0;
+          const shimmerPhase = d.vpX * 17.3 + d.vpY * 31.7; // unique per object
+          const shimmer = 1
+            + 0.04 * Math.sin(t * 0.0008 + shimmerPhase)
+            + 0.025 * Math.sin(t * 0.0013 + shimmerPhase * 2.3)
+            + 0.015 * Math.sin(t * 0.0021 + shimmerPhase * 0.7);
+          // Light echo pulse: 45s cycle per DSO, 1.5s bright window
+          const pulsePhase = (t * 0.001 + shimmerPhase * 50) % 45;
+          const pulseBoost = pulsePhase < 1.5 ? Math.pow(Math.sin(pulsePhase / 1.5 * Math.PI), 2) * 0.25 : 0;
+          const dsoAlpha = clamp(baseAlpha * shimmer + pulseBoost, 0, 1);
+          ctx.globalAlpha = dsoAlpha;
+          // Galaxy rotation for spiral types
+          const isRotatable = d.type === 'whirlpool' || d.type === 'triangulum';
+          if (isRotatable) {
+            ctx.save();
+            ctx.translate(px, py);
+            ctx.rotate(driftTime * 0.00015);
+            ctx.drawImage(tex, -tex.width / 2, -tex.height / 2);
+            ctx.restore();
+          } else {
+            ctx.drawImage(tex, px - tex.width / 2, py - tex.height / 2);
+          }
+          ctx.globalAlpha = 1;
+          // Overlay stars create per-frame gradients — skip during fast scroll
+          if (scrollVelMag < 300) {
+            if (d.type === 'pleiades') drawPleiadesStars(ctx, px, py, sz, dsoAlpha, t);
+            else if (d.type === 'orion_nebula') drawTrapeziumStars(ctx, px, py, sz, dsoAlpha);
+          }
+        }
+        ctx.restore();
+      };
+
+      // DSO Layer 0: galaxies (deepest — almost locked to MW)
+      drawDSOLayer(0);
+
       // Bright wisps along MW band (Lissajous drift, organic alpha pulsation)
-      if (!reduced && time !== undefined && mwWisps.length > 0) {
+      // Skip during fast scroll — per-frame radialGradient creation is expensive
+      if (!reduced && time !== undefined && mwWisps.length > 0 && scrollVelMag < 300) {
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         for (let i = 0; i < mwWisps.length; i++) {
@@ -2225,8 +4541,8 @@ export function StarField() {
 
       // Deep field background (sub-pixel dots behind everything, very low parallax)
       if (deepFieldCanvas) {
-        const dfOffX = (smoothCameraX * 0.015) | 0;
-        const dfOffY = (smoothCameraY * 0.015) | 0;
+        const dfOffX = (smoothCameraX * 0.06 + Math.sin(driftTime * 0.01) * 8) | 0;
+        const dfOffY = (smoothCameraY * 0.06 + Math.cos(driftTime * 0.01 + 1.3) * 6) | 0;
         ctx.save();
         ctx.globalAlpha = 0.7;
         ctx.imageSmoothingEnabled = true;
@@ -2234,6 +4550,9 @@ export function StarField() {
         ctx.globalAlpha = 1;
         ctx.restore();
       }
+
+      // DSO Layer 1: large nebulae (mid-depth)
+      drawDSOLayer(1);
 
       // Zone nebulae (additive, pre-computed domain-warped textures)
       // Oversized textures — draw at (lw+2*NEB_PAD)×(lh+2*NEB_PAD), no wrapping needed
@@ -2246,24 +4565,40 @@ export function StarField() {
       for (let i = 0; i < ZONES.length; i++) {
         if (wts[i] < 0.01 || !zoneNebulae[i]) continue;
         ctx.globalAlpha = wts[i];
-        ctx.drawImage(zoneNebulae[i], nebCamX - NEB_PAD, nebCamY - NEB_PAD, nebDW, nebDH);
+        // Per-zone Lissajous gas drift (max ~18px, within NEB_PAD budget)
+        const nebDriftX = Math.sin(driftTime * 0.015 + i * 2.1) * 12 + Math.sin(driftTime * 0.009 + i * 4.7) * 6;
+        const nebDriftY = Math.cos(driftTime * 0.012 + i * 3.3) * 10 + Math.cos(driftTime * 0.007 + i * 5.9) * 5;
+        ctx.drawImage(zoneNebulae[i], nebCamX - NEB_PAD + nebDriftX, nebCamY - NEB_PAD + nebDriftY, nebDW, nebDH);
       }
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // Special objects (skip when quality is very low)
-      if (time !== undefined && qualityLevel > 0.3) drawSpecials(wts, time);
+      // DSO Layer 2: compact objects (nearest — most parallax)
+      drawDSOLayer(2);
 
-      // Constellations & deep sky objects (behind star layers)
-      if (time !== undefined && qualityLevel > 0.1) drawConstellationsAndDSO(wts, time);
+      // Skip expensive objects during fast scroll (per-frame gradient creation)
+      const fastScroll = scrollVelMag > 300;
 
-      // Galaxies
-      for (const g of galaxies) drawGalObj(g, time ?? 0);
+      // Special objects (skip when quality is very low or fast scroll)
+      if (time !== undefined && qualityLevel > 0.3 && !fastScroll) drawSpecials(wts, time);
+
+      // Constellations (behind star layers)
+      if (time !== undefined && qualityLevel > 0.1 && !fastScroll) drawConstellations(wts, time);
+
+      // Galaxies (skip during fast scroll — each creates radialGradients)
+      if (!fastScroll) {
+        for (const g of galaxies) drawGalObj(g, time ?? 0);
+      }
 
       // Per-layer star rendering with inter-layer fog
       for (let layerIdx = 0; layerIdx < 6; layerIdx++) {
-        // Adaptive quality: skip dust layer when severely degraded
-        if (layerIdx === 0 && qualityLevel < 0.5) {
+        // Skip dust layer (2400 dim stars) during fast scroll or low quality
+        if (layerIdx === 0 && (qualityLevel < 0.5 || fastScroll)) {
+          drawFog(layerIdx);
+          continue;
+        }
+        // Skip distant layer during fast scroll (550 stars)
+        if (layerIdx === 1 && fastScroll && scrollVelMag > 600) {
           drawFog(layerIdx);
           continue;
         }
@@ -2276,11 +4611,11 @@ export function StarField() {
       // Color wash
       drawWash(wts);
 
-      // Atmospheric effects (zodiacal light, airglow)
-      if (!reduced) drawAtmospheric(wts);
+      // Atmospheric effects (zodiacal light, airglow) — skip during fast scroll
+      if (!reduced && !fastScroll) drawAtmospheric(wts);
 
-      // Foreground dust particles (skip when quality low)
-      if (!reduced && qualityLevel > 0.4) {
+      // Foreground dust particles (skip when quality low or fast scroll)
+      if (!reduced && qualityLevel > 0.4 && !fastScroll) {
         for (const dp of dustParticles) {
           const dx = dp.x + smoothMouseX * DUST_MOUSE_PARALLAX - smoothCameraX * 0.30;
           const dy = dp.y + smoothMouseY * DUST_MOUSE_PARALLAX * 0.6 - smoothCameraY * 0.30;
@@ -2298,10 +4633,16 @@ export function StarField() {
         }
       }
 
-      // Shooting stars
+      // Shooting stars (skip spawning during fast scroll, always update existing)
       if (time !== undefined && !reduced) {
-        maybeSpawnShootingStar(time);
+        if (!fastScroll) {
+          maybeSpawnShootingStar(time);
+          maybeSpawnSatellite(time);
+          maybeSpawnComet(time);
+        }
         updateAndDrawShootingStars();
+        updateAndDrawSatellites();
+        updateAndDrawComets();
       }
     };
 
@@ -2310,14 +4651,15 @@ export function StarField() {
       const dt = prevTime ? (t - prevTime) / 1000 : 0.016;
       prevTime = t;
 
-      // Adaptive quality: monitor FPS every 30 frames
+      // Adaptive quality: monitor FPS every 20 frames (faster response)
       fpsAccum += dt;
       fpsFrames++;
-      if (fpsFrames >= 30) {
+      if (fpsFrames >= 20) {
         const avgFps = fpsFrames / fpsAccum;
-        if (avgFps < 30) qualityLevel = Math.max(0.25, qualityLevel - 0.1);
-        else if (avgFps < 45) qualityLevel = Math.max(0.5, qualityLevel - 0.05);
-        else if (avgFps > 55) qualityLevel = Math.min(1.0, qualityLevel + 0.05);
+        if (avgFps < 25) qualityLevel = Math.max(0.25, qualityLevel - 0.15);
+        else if (avgFps < 35) qualityLevel = Math.max(0.4, qualityLevel - 0.08);
+        else if (avgFps < 45) qualityLevel = Math.max(0.5, qualityLevel - 0.04);
+        else if (avgFps > 55) qualityLevel = Math.min(1.0, qualityLevel + 0.03);
         fpsAccum = 0;
         fpsFrames = 0;
       }
@@ -2342,9 +4684,10 @@ export function StarField() {
         smoothCameraX += (targetCamX - smoothCameraX) * camDamping;
         smoothCameraY += (targetCamY - smoothCameraY) * camDamping;
       }
-      // Camera velocity for motion blur
+      // Camera velocity for motion blur + scroll-velocity gate
       camVelX = dt > 0 ? (smoothCameraX - prevCamX) / dt : 0;
       camVelY = dt > 0 ? (smoothCameraY - prevCamY) / dt : 0;
+      scrollVelMag = Math.hypot(camVelX, camVelY);
       prevCamX = smoothCameraX;
       prevCamY = smoothCameraY;
       // Mouse parallax lerp
@@ -2364,19 +4707,19 @@ export function StarField() {
       const newLw = window.innerWidth, newLh = window.innerHeight;
       if (newLw === lw && newLh === lh) return;
       resize();
-      generateMWLayers(); generateZoneNebulae(); generateDeepField();
+      generateMWLayers(); generateZoneNebulae(); generateDSOTextures(); generateDeepField();
       // Only regenerate stars if dimensions changed significantly (>5%)
       // Prevents mobile URL bar show/hide from causing full star flash
       const wRatio = starsLw ? Math.abs(lw - starsLw) / starsLw : 1;
       const hRatio = starsLh ? Math.abs(lh - starsLh) / starsLh : 1;
       if (wRatio > 0.05 || hRatio > 0.05) {
-        generateDustGrid(); initStars(); computeStarDustDim(); generateStarSprites(); initDustParticles(); initMWWisps();
+        generateDustGrid(); initStars(); computeStarDustDim(); generateStarSprites(); generateConstellationSprites(); initDustParticles(); initMWWisps();
         starsLw = lw; starsLh = lh;
       }
       if (reduced) drawFrame();
     };
 
-    resize(); generateMWLayers(); generateZoneNebulae(); generateDustGrid(); initStars(); computeStarDustDim(); generateStarSprites(); generateDeepField(); initDustParticles(); initMWWisps();
+    resize(); generateMWLayers(); generateZoneNebulae(); generateDSOTextures(); generateDustGrid(); initStars(); computeStarDustDim(); generateStarSprites(); generateConstellationSprites(); generateDeepField(); initDustParticles(); initMWWisps();
     starsLw = lw; starsLh = lh;
     smoothScroll = scrollY; // Initialize to current position
     // Initialize camera to current scroll position on helix path

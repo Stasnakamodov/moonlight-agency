@@ -12,6 +12,7 @@
 
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --font-display: var(--font-cormorant), "Cormorant Garamond", Georgia, serif;
 }
 
 body {
@@ -165,6 +166,156 @@ a {
     rgba(196, 181, 253, 0.15) 70%,
     transparent 100%
   );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HERO TITLE — Compositor-only animation system
+   0 repaints at idle: only opacity + transform ever animate
+   ═══════════════════════════════════════════════════════════ */
+
+/* Base title — text-shadow provides ALL glow (no duplicate layers needed).
+   GSAP animates textShadow on h1 for breathing; chars inherit via CSS. */
+.hero-title {
+  color: #e8f4f8;
+}
+
+/* SplitText chars — GPU layer for transform + opacity */
+.hero-title [data-char] {
+  display: inline-block;
+  will-change: transform, opacity;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* Per-char glow driven by --glow CSS var (0→~1.5).
+   Entrance flash uses 1.5 for bright materialization; hover/shimmer use 0→1. */
+.hero-title [data-char] {
+  --glow: 0;
+  filter: brightness(calc(1 + var(--glow) * 0.5))
+          drop-shadow(0 0 calc(var(--glow) * 12px) rgba(125,211,252,0.8))
+          drop-shadow(0 0 calc(var(--glow) * 30px) rgba(196,181,253,0.35))
+          drop-shadow(0 0 calc(var(--glow) * 55px) rgba(255,255,255,0.1));
+  transition: filter 0.15s ease-out;
+}
+
+/* Cursor radial light via CSS custom props */
+.hero-title-wrap {
+  position: relative;
+}
+
+/* Ambient glow behind title — soft radial blur, no box-shadow rectangles */
+.hero-title-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -30% -15%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 50%,
+    rgba(125,211,252,0.07) 0%,
+    rgba(196,181,253,0.04) 40%,
+    transparent 70%
+  );
+  filter: blur(40px);
+  animation: hero-ambient-breathe 6s ease-in-out infinite;
+}
+
+@keyframes hero-ambient-breathe {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+.hero-title-wrap::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle 180px at var(--cursor-x, 50%) var(--cursor-y, 50%),
+    rgba(125,211,252,0.12) 0%,
+    rgba(196,181,253,0.06) 40%,
+    transparent 70%
+  );
+  transition: opacity 0.3s ease-out;
+  will-change: opacity;
+}
+
+.hero-title-wrap.cursor-active::after {
+  opacity: 1;
+}
+
+/* Big Bang flash — radial burst at beam origin */
+.hero-flash {
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  left: -250px;
+  top: 50%;
+  transform: translateY(-50%) scale(0.15);
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255,255,255,1) 0%,
+    rgba(255,255,255,0.8) 8%,
+    rgba(125,211,252,0.6) 18%,
+    rgba(196,181,253,0.3) 35%,
+    rgba(125,211,252,0.1) 55%,
+    transparent 75%
+  );
+  filter: blur(8px);
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
+}
+
+/* Light beam sweep — crosses title to ignite characters */
+.hero-beam {
+  position: absolute;
+  top: -40%;
+  bottom: -40%;
+  width: 180px;
+  left: -90px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
+  background:
+    /* Hot white core */
+    linear-gradient(90deg,
+      transparent 35%,
+      rgba(255,255,255,0.7) 46%,
+      rgba(255,255,255,1) 50%,
+      rgba(255,255,255,0.7) 54%,
+      transparent 65%
+    ),
+    /* Blue halo */
+    linear-gradient(90deg,
+      transparent 10%,
+      rgba(125,211,252,0.3) 30%,
+      rgba(125,211,252,0.55) 50%,
+      rgba(125,211,252,0.3) 70%,
+      transparent 90%
+    ),
+    /* Soft violet outer glow */
+    linear-gradient(90deg,
+      transparent 0%,
+      rgba(196,181,253,0.08) 15%,
+      rgba(196,181,253,0.18) 50%,
+      rgba(196,181,253,0.08) 85%,
+      transparent 100%
+    );
+  filter: blur(3px);
+}
+
+/* Glowing accent line */
+.hero-line-glow {
+  background: linear-gradient(90deg, rgba(125,211,252,0.5), rgba(125,211,252,0.15), transparent);
+  box-shadow: 0 0 16px rgba(125,211,252,0.2), 0 0 4px rgba(125,211,252,0.4);
 }
 
 @keyframes hero-orb-drift {

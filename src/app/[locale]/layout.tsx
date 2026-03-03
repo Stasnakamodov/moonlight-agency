@@ -3,7 +3,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
 import { hasLocale } from "next-intl";
 import { notFound } from "next/navigation";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono, Cormorant_Garamond } from "next/font/google";
 import { routing } from "@/i18n/routing";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
@@ -21,6 +21,12 @@ const inter = Inter({
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   variable: "--font-jetbrains",
+});
+
+const cormorantGaramond = Cormorant_Garamond({
+  subsets: ["latin", "cyrillic"],
+  weight: ["300"],
+  variable: "--font-cormorant",
 });
 
 type Props = {
@@ -57,7 +63,7 @@ export default async function LocaleLayout({ children, params }: Props) {
   const messages = await getMessages();
 
   return (
-    <html lang={locale} className={`${inter.variable} ${jetbrainsMono.variable}`}>
+    <html lang={locale} className={`${inter.variable} ${jetbrainsMono.variable} ${cormorantGaramond.variable}`}>
       <body className="min-h-screen bg-bg-deep text-text-primary font-sans antialiased">
         <NextIntlClientProvider messages={messages}>
           <div className="relative w-full">
